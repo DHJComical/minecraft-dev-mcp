@@ -85,9 +85,17 @@ and `c.cfg` — each file surfaces its own. Entries parsed from a path carry
 `sourceFile`; an entry without one came from inline content and is still treated
 as a distinct file for attribution purposes.
 
-**Not covered:** the Fabric access-widener validator keeps its single-class
-member lookup. AWs have the same declare-vs-inherit semantics, so the same
-treatment applies there — deliberately left out to keep this change reviewable.
+**Access wideners get the same treatment.** Verified against Fabric's own
+implementation rather than assumed: `AccessWidenerClassVisitor` looks a member up
+as `EntryTriple(className, name, descriptor)` for the class it is currently
+visiting, and `AccessWidener` resolves that through a plain `HashMap` with no
+superclass fallback — so an AW entry naming a subclass for an inherited member
+widens nothing, exactly like an AT. The walk itself therefore lives in
+`src/utils/bytecode-hierarchy.ts` (`ancestorsOf`, `findDeclaringAncestor`) and
+both validators share it; only the corrected-directive rendering differs, since
+AT and AW have different directive grammars. The AW message renders the declarer
+in whichever notation the entry used (the AW parser dot-normalizes class names)
+while the pasteable `Use:` line keeps AW's on-disk slash form.
 
 ---
 

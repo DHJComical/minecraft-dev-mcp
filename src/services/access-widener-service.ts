@@ -29,14 +29,12 @@ import type {
   AccessWidenerValidation,
   MappingType,
 } from '../types/minecraft.js';
+import { type ClassBytecodeMap, findDeclaringAncestor } from '../utils/bytecode-hierarchy.js';
 import { descriptorToReadable as sharedDescriptorToReadable } from '../utils/descriptor-utils.js';
 import { AccessWidenerParseError } from '../utils/errors.js';
 import { logger } from '../utils/logger.js';
 import { findSimilarName } from '../utils/suggestions.js';
 import { bytecodeUnavailableMessage, getBytecodeIndexService } from './bytecode-index-service.js';
-
-/** A map of internal class name (slashes, `$`) → its authoritative bytecode metadata. */
-type ClassBytecodeMap = Map<string, BytecodeClass>;
 
 /** Convert an AW dotted+`$` class name to an internal JVM name (slashes). */
 function toInternalName(className: string): string {
@@ -78,6 +76,37 @@ export function accessWidenerEntryToString(entry: AccessWidenerEntry): string {
   if (entry.targetType === 'class' || !entry.memberName) return head;
   const desc = entry.memberDescriptor ? ` ${entry.memberDescriptor}` : '';
   return `${head} ${entry.memberName}${desc}`;
+}
+
+/**
+ * Build the "you targeted the wrong class" error + the corrected directive,
+ * given the ancestor that really declares the member.
+ *
+ * Fabric's `AccessWidenerClassVisitor` looks the member up as
+ * `EntryTriple(className, name, descriptor)` against the class it is visiting,
+ * with no superclass fallback — so naming a subclass for an inherited member
+ * silently widens nothing.
+ */
+function inheritedMemberFinding(
+  entry: AccessWidenerEntry,
+  declarer: BytecodeClass,
+  memberName: string,
+): { message: string; suggestion: string } {
+  const kind = entry.targetType === 'method' ? 'Method' : 'Field';
+  // Render the declarer the way the entry names its own class, so one sentence
+  // never mixes `net/mc/Foo` with `net.mc.Foo`. The parser dot-normalizes class
+  // names, but the pure test seam passes internal names straight through.
+  const declarerDisplay = entry.className.includes('/')
+    ? declarer.name
+    : declarer.name.replace(/\//g, '.');
+  // The corrected line keeps AW's on-disk form (slashes) so it can be pasted
+  // into an .accesswidener file as-is.
+  const corrected = accessWidenerEntryToString({ ...entry, className: declarer.name });
+  const rule = 'An access widener only widens the class it names, so this entry has no effect.';
+  return {
+    message: `${kind} '${memberName}' is not declared in ${entry.className} — it is inherited from ${declarerDisplay}. ${rule}`,
+    suggestion: `Use: ${corrected}`,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -126,6 +155,21 @@ export function validateEntryAgainstBytecode(
   if (entry.targetType === 'method' && entry.memberName) {
     const methods = cls.methods.filter((m) => m.name === entry.memberName);
     if (methods.length === 0) {
+      // The member may exist on a parent, in which case the entry is inert
+      // rather than wrong-named and the fix is to retarget it.
+      const declarer = findDeclaringAncestor(
+        cls,
+        classMap,
+        'method',
+        entry.memberName,
+        entry.memberDescriptor,
+      );
+      if (declarer) {
+        const finding = inheritedMemberFinding(entry, declarer, entry.memberName);
+        errors.push(finding.message);
+        return { errors, warnings, suggestion: finding.suggestion };
+      }
+
       errors.push(`Method '${entry.memberName}' not found in ${entry.className}`);
       const candidates = [
         ...new Set(
@@ -144,6 +188,21 @@ export function validateEntryAgainstBytecode(
     if (entry.memberDescriptor) {
       const matched = methods.filter((m) => m.desc === entry.memberDescriptor);
       if (matched.length === 0) {
+        // The name is declared here but this overload is not — it may be the
+        // parent's, which is an inheritance problem, not a typo'd descriptor.
+        const declarer = findDeclaringAncestor(
+          cls,
+          classMap,
+          'method',
+          entry.memberName,
+          entry.memberDescriptor,
+        );
+        if (declarer) {
+          const finding = inheritedMemberFinding(entry, declarer, entry.memberName);
+          errors.push(finding.message);
+          return { errors, warnings, suggestion: finding.suggestion };
+        }
+
         const found = methods.map((m) => m.desc).join(', ');
         errors.push(
           `Method '${entry.memberName}' exists but no overload matches descriptor ${entry.memberDescriptor} (found: ${found})`,
@@ -158,6 +217,13 @@ export function validateEntryAgainstBytecode(
   if (entry.targetType === 'field' && entry.memberName) {
     const field = cls.fields.find((f) => f.name === entry.memberName);
     if (!field) {
+      const declarer = findDeclaringAncestor(cls, classMap, 'field', entry.memberName);
+      if (declarer) {
+        const finding = inheritedMemberFinding(entry, declarer, entry.memberName);
+        errors.push(finding.message);
+        return { errors, warnings, suggestion: finding.suggestion };
+      }
+
       errors.push(`Field '${entry.memberName}' not found in ${entry.className}`);
       const similar = findSimilarName(
         entry.memberName,
@@ -362,7 +428,11 @@ export class AccessWidenerService {
 
     let classMap: ClassBytecodeMap;
     try {
-      classMap = await getBytecodeIndexService().getClassBytecode(mcVersion, mapping, [...needed]);
+      // Hierarchy-aware: ancestors are needed to tell "member does not exist"
+      // from "member is declared on a parent, so this entry is inert".
+      classMap = await getBytecodeIndexService().getClassBytecodeWithHierarchy(mcVersion, mapping, [
+        ...needed,
+      ]);
     } catch (error) {
       errors.push({
         entry: firstEntry,

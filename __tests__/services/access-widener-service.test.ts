@@ -533,3 +533,120 @@ describe('Access Widener Validation (bytecode + descriptor matching)', () => {
     expect(res.suggestion).toContain('Ghosts');
   });
 });
+
+/**
+ * Inherited members. Fabric's AccessWidenerClassVisitor looks a member up as
+ * EntryTriple(className, name, descriptor) against the class it is visiting, and
+ * AccessWidener resolves that through a plain HashMap with no superclass
+ * fallback — so an entry naming a subclass for an inherited member widens
+ * nothing at all. Same rule as Forge/NeoForge ATs, same shared walk.
+ */
+describe('Access Widener inherited members', () => {
+  const BASE = bcClass({
+    name: 'net/test/Base',
+    methods: [bcMethod('tick', '()V', ['protected'])],
+    fields: [bcField('ticks', 'I', ['private'])],
+  });
+  const CHILD = bcClass({ name: 'net/test/Child', superName: 'net/test/Base' });
+
+  it('reports the declaring superclass for an inherited method', () => {
+    const res = validateEntryAgainstBytecode(
+      makeEntry({
+        targetType: 'method',
+        className: 'net/test/Child',
+        memberName: 'tick',
+        memberDescriptor: '()V',
+      }),
+      mapOf(CHILD, BASE),
+    );
+    expect(res.errors[0]).toContain("Method 'tick' is not declared in net/test/Child");
+    expect(res.errors[0]).toContain('inherited from net/test/Base');
+    expect(res.errors[0]).toContain('has no effect');
+    // Corrected line keeps AW's internal-name (slash) directive form.
+    expect(res.suggestion).toBe('Use: accessible method net/test/Base tick ()V');
+  });
+
+  it('reports the declaring superclass for an inherited field', () => {
+    const res = validateEntryAgainstBytecode(
+      makeEntry({
+        accessType: 'mutable',
+        targetType: 'field',
+        className: 'net/test/Child',
+        memberName: 'ticks',
+        memberDescriptor: 'I',
+      }),
+      mapOf(CHILD, BASE),
+    );
+    expect(res.errors[0]).toContain('inherited from net/test/Base');
+    expect(res.suggestion).toBe('Use: mutable field net/test/Base ticks I');
+  });
+
+  it('finds interface default methods', () => {
+    const iface = bcClass({
+      name: 'net/test/Tickable',
+      isInterface: true,
+      methods: [bcMethod('tick', '()V')],
+    });
+    const impl = bcClass({ name: 'net/test/Impl', interfaces: ['net/test/Tickable'] });
+    const res = validateEntryAgainstBytecode(
+      makeEntry({
+        targetType: 'method',
+        className: 'net/test/Impl',
+        memberName: 'tick',
+        memberDescriptor: '()V',
+      }),
+      mapOf(impl, iface),
+    );
+    expect(res.errors[0]).toContain('inherited from net/test/Tickable');
+  });
+
+  it('stays silent when the class declares the member itself', () => {
+    const overriding = bcClass({
+      name: 'net/test/Child',
+      superName: 'net/test/Base',
+      methods: [bcMethod('tick', '()V')],
+    });
+    const res = validateEntryAgainstBytecode(
+      makeEntry({
+        targetType: 'method',
+        className: 'net/test/Child',
+        memberName: 'tick',
+        memberDescriptor: '()V',
+      }),
+      mapOf(overriding, BASE),
+    );
+    expect(res.errors).toEqual([]);
+  });
+
+  it('never blames a parent for a missing constructor', () => {
+    const parent = bcClass({
+      name: 'net/test/Parent',
+      methods: [bcMethod('<init>', '(I)V', ['protected'])],
+    });
+    const child = bcClass({ name: 'net/test/Kid', superName: 'net/test/Parent' });
+    const res = validateEntryAgainstBytecode(
+      makeEntry({
+        targetType: 'method',
+        className: 'net/test/Kid',
+        memberName: '<init>',
+        memberDescriptor: '(I)V',
+      }),
+      mapOf(child, parent),
+    );
+    expect(res.errors[0]).toContain('not found');
+    expect(res.errors[0]).not.toContain('inherited');
+  });
+
+  it('still reports plain "not found" when no ancestor declares it', () => {
+    const res = validateEntryAgainstBytecode(
+      makeEntry({
+        targetType: 'field',
+        className: 'net/test/Child',
+        memberName: 'nope',
+        memberDescriptor: 'I',
+      }),
+      mapOf(CHILD, BASE),
+    );
+    expect(res.errors[0]).toBe("Field 'nope' not found in net/test/Child");
+  });
+});

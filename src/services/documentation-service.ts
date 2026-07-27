@@ -505,6 +505,8 @@ accessWidener v2 named
 accessible class net/minecraft/example/PrivateClass
 accessible method net/minecraft/example/Class methodName (Lsome/Descriptor;)V
 accessible field net/minecraft/example/Class fieldName Lsome/Type;
+
+Common pitfall — inherited members: an access widener only widens the class it NAMES. Fabric looks the member up as (class, name, descriptor) on the class being visited, with no superclass fallback, so naming a subclass for a member declared on a parent widens nothing at all — no build error, no crash, just an inaccessible member at runtime. Name the class that DECLARES the member.
       `.trim(),
     };
   }

@@ -38,14 +38,16 @@ import type {
   AccessTransformerValidation,
   MappingType,
 } from '../types/minecraft.js';
+import { type ClassBytecodeMap, findDeclaringAncestor } from '../utils/bytecode-hierarchy.js';
 import { descriptorToReadable as sharedDescriptorToReadable } from '../utils/descriptor-utils.js';
 import { AccessTransformerParseError } from '../utils/errors.js';
 import { logger } from '../utils/logger.js';
 import { findSimilarName } from '../utils/suggestions.js';
 import { bytecodeUnavailableMessage, getBytecodeIndexService } from './bytecode-index-service.js';
 
-/** A map of internal class name (slashes, `$`) → its authoritative bytecode metadata. */
-export type ClassBytecodeMap = Map<string, BytecodeClass>;
+// Re-exported for the existing test seam and downstream imports; the type now
+// lives with the hierarchy helpers that both validators share.
+export type { ClassBytecodeMap } from '../utils/bytecode-hierarchy.js';
 
 // ---------------------------------------------------------------------------
 // AT-local modifier + parsing helpers (module-internal)
@@ -206,69 +208,6 @@ function suggestClassName(targetInternal: string, pool: string[]): string | null
   const pkg = packageOf(targetInternal);
   const samePackage = pool.filter((n) => packageOf(n) === pkg).map(simpleClassName);
   return findSimilarName(simpleClassName(targetInternal), samePackage);
-}
-
-/**
- * Walk a class's ancestors — superclass chain first, then interfaces — breadth
- * first, yielding each ancestor present in `classMap`. The starting class is NOT
- * yielded. Ancestors outside the JAR are invisible here (never dumped) and are
- * simply skipped; `seen` also makes a cyclic/malformed hierarchy terminate.
- */
-function* ancestorsOf(cls: BytecodeClass, classMap: ClassBytecodeMap): Generator<BytecodeClass> {
-  const seen = new Set<string>([cls.name]);
-  // superName before interfaces: a member found on the superclass chain is the
-  // more likely intent, and is what the user must retarget.
-  const queue: string[] = [cls.superName, ...cls.interfaces].filter((n): n is string => !!n);
-
-  while (queue.length > 0) {
-    const name = queue.shift() as string;
-    if (seen.has(name)) continue;
-    seen.add(name);
-    const ancestor = classMap.get(name);
-    if (!ancestor) continue; // outside the JAR (java/lang/*, libraries)
-    yield ancestor;
-    for (const parent of [ancestor.superName, ...ancestor.interfaces]) {
-      if (parent && !seen.has(parent)) queue.push(parent);
-    }
-  }
-}
-
-/**
- * Find the ancestor that actually declares a member the entry targets, for the
- * inherited-member error (issue #12: "parent classes also need access
- * transformation").
- *
- * An AT transforms ONLY the class it names — a directive on a subclass that
- * merely inherits the member is silently inert, which is exactly the kind of
- * failure that is invisible until runtime. When `descriptor` is given, an
- * ancestor only counts if it has that exact overload; otherwise name alone is
- * enough (AT fields carry no descriptor).
- *
- * Constructors and static initializers are excluded: they are NEVER inherited,
- * so a parent's `<init>` is a different constructor entirely, and blaming it
- * would send the user to rewrite a directive that is simply targeting a
- * constructor the class does not have.
- */
-function findDeclaringAncestor(
-  cls: BytecodeClass,
-  classMap: ClassBytecodeMap,
-  memberType: 'method' | 'field',
-  memberName: string,
-  descriptor?: string,
-): BytecodeClass | null {
-  if (memberType === 'method' && (memberName === '<init>' || memberName === '<clinit>')) {
-    return null;
-  }
-  for (const ancestor of ancestorsOf(cls, classMap)) {
-    const declares =
-      memberType === 'method'
-        ? ancestor.methods.some(
-            (m) => m.name === memberName && (!descriptor || m.desc === descriptor),
-          )
-        : ancestor.fields.some((f) => f.name === memberName);
-    if (declares) return ancestor;
-  }
-  return null;
 }
 
 /** Dotted form of an internal class name, for user-facing messages. */
