@@ -209,6 +209,95 @@ function suggestClassName(targetInternal: string, pool: string[]): string | null
 }
 
 /**
+ * Walk a class's ancestors — superclass chain first, then interfaces — breadth
+ * first, yielding each ancestor present in `classMap`. The starting class is NOT
+ * yielded. Ancestors outside the JAR are invisible here (never dumped) and are
+ * simply skipped; `seen` also makes a cyclic/malformed hierarchy terminate.
+ */
+function* ancestorsOf(cls: BytecodeClass, classMap: ClassBytecodeMap): Generator<BytecodeClass> {
+  const seen = new Set<string>([cls.name]);
+  // superName before interfaces: a member found on the superclass chain is the
+  // more likely intent, and is what the user must retarget.
+  const queue: string[] = [cls.superName, ...cls.interfaces].filter((n): n is string => !!n);
+
+  while (queue.length > 0) {
+    const name = queue.shift() as string;
+    if (seen.has(name)) continue;
+    seen.add(name);
+    const ancestor = classMap.get(name);
+    if (!ancestor) continue; // outside the JAR (java/lang/*, libraries)
+    yield ancestor;
+    for (const parent of [ancestor.superName, ...ancestor.interfaces]) {
+      if (parent && !seen.has(parent)) queue.push(parent);
+    }
+  }
+}
+
+/**
+ * Find the ancestor that actually declares a member the entry targets, for the
+ * inherited-member error (issue #12: "parent classes also need access
+ * transformation").
+ *
+ * An AT transforms ONLY the class it names — a directive on a subclass that
+ * merely inherits the member is silently inert, which is exactly the kind of
+ * failure that is invisible until runtime. When `descriptor` is given, an
+ * ancestor only counts if it has that exact overload; otherwise name alone is
+ * enough (AT fields carry no descriptor).
+ *
+ * Constructors and static initializers are excluded: they are NEVER inherited,
+ * so a parent's `<init>` is a different constructor entirely, and blaming it
+ * would send the user to rewrite a directive that is simply targeting a
+ * constructor the class does not have.
+ */
+function findDeclaringAncestor(
+  cls: BytecodeClass,
+  classMap: ClassBytecodeMap,
+  memberType: 'method' | 'field',
+  memberName: string,
+  descriptor?: string,
+): BytecodeClass | null {
+  if (memberType === 'method' && (memberName === '<init>' || memberName === '<clinit>')) {
+    return null;
+  }
+  for (const ancestor of ancestorsOf(cls, classMap)) {
+    const declares =
+      memberType === 'method'
+        ? ancestor.methods.some(
+            (m) => m.name === memberName && (!descriptor || m.desc === descriptor),
+          )
+        : ancestor.fields.some((f) => f.name === memberName);
+    if (declares) return ancestor;
+  }
+  return null;
+}
+
+/** Dotted form of an internal class name, for user-facing messages. */
+function toDottedName(internal: string): string {
+  return internal.replace(/\//g, '.');
+}
+
+/**
+ * Build the "you targeted the wrong class" error + the corrected directive to
+ * paste, given the ancestor that really declares the member.
+ */
+function inheritedMemberFinding(
+  entry: AccessTransformerEntry,
+  declarer: BytecodeClass,
+  memberType: 'method' | 'field',
+  memberName: string,
+): { message: string; suggestion: string } {
+  const declarerName = toDottedName(declarer.name);
+  const kind = memberType === 'method' ? 'Method' : 'Field';
+  const corrected = accessTransformerEntryToString({ ...entry, className: declarerName });
+  const rule =
+    'An access transformer only transforms the class it names, so this directive has no effect.';
+  return {
+    message: `${kind} '${memberName}' is not declared in ${entry.className} — it is inherited from ${declarerName}. ${rule}`,
+    suggestion: `Use: ${corrected}`,
+  };
+}
+
+/**
  * Is a method overridable (subject to the override-narrowing gotcha, quirk 6.3)?
  * Constructors and static initializers are NOT overridable — a constructor is
  * never inherited, so an AT on `<init>` can never be defeated by a subclass
@@ -346,6 +435,22 @@ export function validateEntryAgainstBytecode(
     const methodSyms = cls.methods.filter((m) => m.name === entry.memberName);
 
     if (methodSyms.length === 0) {
+      // Inherited-member check BEFORE "not found": the member may well exist,
+      // just on a parent, in which case the directive is inert rather than
+      // wrong-named and the fix is to retarget it (issue #12).
+      const declarer = findDeclaringAncestor(
+        cls,
+        classMap,
+        'method',
+        entry.memberName,
+        entry.memberDescriptor,
+      );
+      if (declarer) {
+        const finding = inheritedMemberFinding(entry, declarer, 'method', entry.memberName);
+        errors.push(finding.message);
+        return { errors, warnings, suggestion: finding.suggestion };
+      }
+
       errors.push(`Method '${entry.memberName}' not found in ${entry.className}`);
       // Suggest from real (non-synthetic, non-ctor) method names.
       const candidates = [
@@ -366,6 +471,22 @@ export function validateEntryAgainstBytecode(
     if (entry.memberDescriptor) {
       const matched = methodSyms.filter((m) => m.desc === entry.memberDescriptor);
       if (matched.length === 0) {
+        // The name is declared here but this overload is not — it may be the
+        // parent's. That is still an inherited-member problem, not a typo'd
+        // descriptor, so check before reporting a mismatch.
+        const declarer = findDeclaringAncestor(
+          cls,
+          classMap,
+          'method',
+          entry.memberName,
+          entry.memberDescriptor,
+        );
+        if (declarer) {
+          const finding = inheritedMemberFinding(entry, declarer, 'method', entry.memberName);
+          errors.push(finding.message);
+          return { errors, warnings, suggestion: finding.suggestion };
+        }
+
         const found = methodSyms.map((m) => m.desc).join(', ');
         errors.push(
           `Method '${entry.memberName}' exists but no overload matches descriptor ${entry.memberDescriptor} (found: ${found})`,
@@ -397,6 +518,13 @@ export function validateEntryAgainstBytecode(
     const fieldSyms = cls.fields.filter((f) => f.name === entry.memberName);
 
     if (fieldSyms.length === 0) {
+      const declarer = findDeclaringAncestor(cls, classMap, 'field', entry.memberName);
+      if (declarer) {
+        const finding = inheritedMemberFinding(entry, declarer, 'field', entry.memberName);
+        errors.push(finding.message);
+        return { errors, warnings, suggestion: finding.suggestion };
+      }
+
       errors.push(`Field '${entry.memberName}' not found in ${entry.className}`);
       const similar = findSimilarName(
         entry.memberName,
@@ -414,7 +542,25 @@ export function validateEntryAgainstBytecode(
 }
 
 /**
- * Detect duplicate and conflicting targets across a whole AT file. Pure: no
+ * Locate a pair of clashing entries for the user: line numbers always, and file
+ * names too once more than one file is in play. Empty when neither entry knows
+ * its file and they share a line (the pure single-file unit-test shape).
+ */
+function whereClause(first: AccessTransformerEntry, second: AccessTransformerEntry): string {
+  // An entry with no `sourceFile` came from the content under validation (the
+  // tool accepts inline content, not just a path), so "no file" is still a
+  // DIFFERENT file from a named sibling — comparing the raw values, undefined
+  // included, is what makes the cross-file case fire in that common shape.
+  const at = (e: AccessTransformerEntry): string =>
+    e.sourceFile ? `${e.sourceFile}:${e.line}` : `this file:${e.line}`;
+  if ((first.sourceFile ?? null) !== (second.sourceFile ?? null)) {
+    return ` (${at(first)} vs ${at(second)} — different files, both applied at build time)`;
+  }
+  return first.line === second.line ? '' : ` (line ${first.line} vs line ${second.line})`;
+}
+
+/**
+ * Detect duplicate and conflicting targets across one or more AT files. Pure: no
  * filesystem, no I/O. Exported so the conflict logic is unit-testable without
  * a decompiled Minecraft source tree (`validateAccessTransformer` only reaches
  * this after the decompiled-source check passes).
@@ -425,9 +571,19 @@ export function validateEntryAgainstBytecode(
  * (Forge fails the build with "Invalid AT final conflicts" — error). A
  * compatible variation (same access, `+f` vs none) emits nothing.
  *
+ * `entries` may span several files (mods routinely ship more than one AT, and
+ * the loader applies them together, so a conflict across files fails the build
+ * exactly like one inside a file). When entries carry `sourceFile`, findings
+ * name the files involved. `restrictTo` limits which findings are REPORTED —
+ * pass the file under validation so a conflict purely between two sibling files
+ * isn't re-reported by every call; detection still considers all entries.
+ *
  * @internal
  */
-export function detectAccessTransformerConflicts(entries: AccessTransformerEntry[]): {
+export function detectAccessTransformerConflicts(
+  entries: AccessTransformerEntry[],
+  restrictTo?: ReadonlySet<AccessTransformerEntry>,
+): {
   errors: Array<{ entry: AccessTransformerEntry; message: string }>;
   warnings: Array<{ entry: AccessTransformerEntry; message: string }>;
 } {
@@ -452,12 +608,14 @@ export function detectAccessTransformerConflicts(entries: AccessTransformerEntry
       const curr = group[i];
       if (!curr) continue;
       let isDuplicate = false;
+      let duplicateOf: AccessTransformerEntry | null = null;
       let conflictWith: AccessTransformerEntry | null = null;
       for (let j = 0; j < i; j++) {
         const prev = group[j];
         if (!prev) continue;
         if (sameModifier(prev.modifier, curr.modifier)) {
           isDuplicate = true;
+          duplicateOf = prev;
           break;
         }
         if (incompatibleModifiers(prev.modifier, curr.modifier)) {
@@ -466,14 +624,25 @@ export function detectAccessTransformerConflicts(entries: AccessTransformerEntry
         }
         // else: compatible variation (e.g. same access, +f vs none) — keep looking.
       }
-      if (isDuplicate) {
-        warnings.push({ entry: curr, message: `Duplicate access transformer entry for ${key}` });
+      // Report only findings that involve the file under validation (when the
+      // caller asked for that), so validating file A doesn't also report a
+      // conflict that exists purely between siblings B and C.
+      const other = duplicateOf ?? conflictWith;
+      const reportable =
+        !restrictTo || restrictTo.has(curr) || (other !== null && restrictTo.has(other));
+      if (!reportable) continue;
+
+      if (isDuplicate && duplicateOf) {
+        warnings.push({
+          entry: curr,
+          message: `Duplicate access transformer entry for ${key}${whereClause(duplicateOf, curr)}`,
+        });
       } else if (conflictWith) {
         errors.push({
           entry: curr,
           message: `Conflicting access transformer for ${key}: '${modifierToString(
             conflictWith.modifier,
-          )}' vs '${modifierToString(curr.modifier)}'`,
+          )}' vs '${modifierToString(curr.modifier)}'${whereClause(conflictWith, curr)}`,
         });
       }
     }
@@ -647,7 +816,10 @@ export class AccessTransformerService {
       throw new AccessTransformerParseError(filePath, undefined, `File not found: ${filePath}`);
     }
     const content = readFileSync(filePath, 'utf8');
-    return this.parseAccessTransformer(content, filePath);
+    const parsed = this.parseAccessTransformer(content, filePath);
+    // Stamp provenance so cross-file conflict findings can name both files.
+    for (const entry of parsed.entries) entry.sourceFile = filePath;
+    return parsed;
   }
 
   /**
@@ -657,16 +829,24 @@ export class AccessTransformerService {
    * Default mapping is `'mojmap'` (Forge/NeoForge dev toolchains are
    * mojmap-only post-1.17). Requires the version to have been decompiled (which
    * also produces the remapped JAR this reads). The needed classes — each
-   * targeted class plus its enclosing classes, for the inner-class check — are
-   * resolved from bytecode once (cached), then the pure per-entry validation
-   * runs against `ClassBytecodeMap`. Cross-entry quirk checks (record ctor,
-   * inner-class accessibility) and duplicate/conflict detection run after the
-   * per-entry pass.
+   * targeted class, its enclosing classes (inner-class check) and its ancestors
+   * (inherited-member check) — are resolved from bytecode once (cached), then
+   * the pure per-entry validation runs against `ClassBytecodeMap`. Cross-entry
+   * quirk checks (record ctor, inner-class accessibility) and duplicate/conflict
+   * detection run after the per-entry pass.
+   *
+   * `additionalFiles` are OTHER access transformers that ship with the same mod.
+   * Their entries are not validated against bytecode here (each file is
+   * validated by its own call), but they participate in the cross-entry checks
+   * where a second file legitimately changes the answer: conflict/duplicate
+   * detection, and the record canonical-constructor note (a ctor widened in
+   * another file is still widened at runtime — all ATs are applied together).
    */
   async validateAccessTransformer(
     accessTransformer: AccessTransformer,
     mcVersion: string,
     mapping: MappingType = 'mojmap',
+    additionalFiles: AccessTransformer[] = [],
   ): Promise<AccessTransformerValidation> {
     const errors: AccessTransformerValidation['errors'] = [];
     const warnings: AccessTransformerValidation['warnings'] = [];
@@ -711,7 +891,11 @@ export class AccessTransformerService {
 
     let classMap: ClassBytecodeMap;
     try {
-      classMap = await getBytecodeIndexService().getClassBytecode(mcVersion, mapping, [...needed]);
+      // Hierarchy-aware: ancestors are needed to tell "member does not exist"
+      // from "member is declared on a parent, so this directive is inert".
+      classMap = await getBytecodeIndexService().getClassBytecodeWithHierarchy(mcVersion, mapping, [
+        ...needed,
+      ]);
     } catch (error) {
       errors.push({
         entry: firstEntry,
@@ -733,12 +917,20 @@ export class AccessTransformerService {
       return suggestionPool;
     };
 
+    // All entries the loader will apply together: this file plus any sibling AT
+    // files the caller passed. Cross-entry quirks must reason over the union —
+    // a ctor widened in another file IS widened at runtime.
+    const allEntries = [
+      ...accessTransformer.entries,
+      ...additionalFiles.flatMap((file) => file.entries),
+    ];
+
     // Validate each entry against bytecode.
     for (const entry of accessTransformer.entries) {
       const validation = validateEntryAgainstBytecode(
         entry,
         classMap,
-        accessTransformer.entries,
+        allEntries,
         // Only a missing class needs the pool, and that is exactly when the
         // class is absent from classMap — so resolve it only then.
         classMap.has(entry.className.replace(/\./g, '/')) ? undefined : getSuggestionPool(),
@@ -753,8 +945,11 @@ export class AccessTransformerService {
       warnings.push(...validation.warnings.map((message) => ({ entry, message })));
     }
 
-    // Duplicate / conflicting target detection (must-do #5).
-    this.detectConflicts(accessTransformer.entries, errors, warnings);
+    // Duplicate / conflicting target detection (must-do #5), over the union so
+    // two files fighting over the same target is caught — that conflict fails
+    // the Forge build just as surely as one inside a single file. Findings are
+    // restricted to those involving THIS file's entries.
+    this.detectConflicts(allEntries, errors, warnings, new Set(accessTransformer.entries));
 
     return {
       isValid: errors.length === 0,
@@ -772,8 +967,9 @@ export class AccessTransformerService {
     entries: AccessTransformerEntry[],
     errors: AccessTransformerValidation['errors'],
     warnings: AccessTransformerValidation['warnings'],
+    restrictTo?: ReadonlySet<AccessTransformerEntry>,
   ): void {
-    const result = detectAccessTransformerConflicts(entries);
+    const result = detectAccessTransformerConflicts(entries, restrictTo);
     errors.push(...result.errors);
     warnings.push(...result.warnings);
   }

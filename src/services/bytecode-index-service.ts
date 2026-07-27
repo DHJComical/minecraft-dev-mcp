@@ -132,6 +132,55 @@ export class BytecodeIndexService {
   }
 
   /**
+   * Like {@link getClassBytecode}, but also resolves each class's ANCESTORS —
+   * the transitive `superName` chain plus every interface — into the same map.
+   *
+   * Needed because an access transformer only transforms the exact class it
+   * names: a directive targeting an inherited member silently does nothing, so
+   * the validator must be able to see where a member is actually declared and
+   * say so. That requires the parents' bytecode, which is only discoverable
+   * FROM the children (superName lives in the child's class file), hence the
+   * round-based closure rather than one batch.
+   *
+   * Ancestors outside the JAR (`java/lang/Object`, library types) simply never
+   * come back from the dumper and are skipped — the walk stops at the edge of
+   * what we can see, and callers must not treat that as "missing".
+   *
+   * `maxDepth` bounds the rounds; MC hierarchies are shallow (< 10), and the
+   * bound also makes a malformed/cyclic hierarchy terminate.
+   */
+  async getClassBytecodeWithHierarchy(
+    version: string,
+    mapping: MappingType,
+    internalNames: string[],
+    maxDepth = 20,
+  ): Promise<Map<string, BytecodeClass>> {
+    const resolved = new Map<string, BytecodeClass>();
+    // Every name we have already asked for — including ones that came back
+    // absent — so a missing ancestor is never re-requested each round.
+    const requested = new Set<string>();
+    let frontier = [...new Set(internalNames)];
+
+    for (let depth = 0; depth < maxDepth && frontier.length > 0; depth++) {
+      for (const name of frontier) requested.add(name);
+      const batch = await this.getClassBytecode(version, mapping, frontier);
+      for (const [name, cls] of batch) resolved.set(name, cls);
+
+      const next = new Set<string>();
+      for (const name of frontier) {
+        const cls = batch.get(name);
+        if (!cls) continue;
+        for (const parent of [cls.superName, ...cls.interfaces]) {
+          if (parent && !requested.has(parent)) next.add(parent);
+        }
+      }
+      frontier = [...next];
+    }
+
+    return resolved;
+  }
+
+  /**
    * List every class's internal name in the remapped JAR via a central-directory
    * scan (no bytecode dumped). Used to build package-scoped "did you mean"
    * suggestion pools for class-not-found errors. Returns `[]` when the JAR is

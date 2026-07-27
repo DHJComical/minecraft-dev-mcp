@@ -529,9 +529,10 @@ Modifier forms:
 
 Member kind is inferred from the token shape (no class/method/field keyword): a 2-token line targets a class; a 3-token line whose last token has '(' targets a method (descriptor attached to the name with no spaces); otherwise it targets a field (bare name, no descriptor).
 
-Two common pitfalls:
+Three common pitfalls:
 - Inner classes: a nested type is only reachable if its enclosing class is public/protected (or widened in this file), so widen the enclosing class too.
 - Records: widening a record to public/protected does NOT widen its canonical constructor. Reading the record's components or codec is fine, but INSTANTIATING it (via 'new' or codec/network deserialization from your code) needs a widened ctor too — add a matching <init> directive at equal-or-wider access.
+- Inherited members: an AT transforms ONLY the class it names. Targeting a member on a subclass that merely inherits it does nothing at all — no build error, no crash, just an inaccessible member at runtime. Name the class that DECLARES the member (walk up the superclass chain / interfaces to find it).
       `.trim(),
       seeAlso: ['Access Wideners'],
     };

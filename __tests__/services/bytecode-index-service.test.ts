@@ -138,6 +138,29 @@ describeIndex('BytecodeIndexService (remapped-JAR bytecode cache)', () => {
     }
   }, 60000);
 
+  it('resolves the full ancestor closure, stopping at the JAR boundary', async () => {
+    const { jarPath, cachePath } = stageJar();
+    try {
+      const svc = new BytecodeIndexService();
+      const PKG = 'net/minecraft/world/level/storage/loot/predicates';
+
+      // Ask for the leaf only: AnyOfCondition extends CompositeLootItemCondition
+      // implements LootItemCondition. Parents are discoverable only FROM the
+      // child's bytecode, so this proves the round-based closure works.
+      const map = await svc.getClassBytecodeWithHierarchy(VERSION, MAPPING, [
+        `${PKG}/AnyOfCondition`,
+      ]);
+
+      expect(map.has(`${PKG}/AnyOfCondition`)).toBe(true);
+      expect(map.has(`${PKG}/CompositeLootItemCondition`)).toBe(true);
+      expect(map.has(`${PKG}/LootItemCondition`)).toBe(true);
+      // java/lang/Object isn't in the JAR — absent, not an error.
+      expect(map.has('java/lang/Object')).toBe(false);
+    } finally {
+      cleanup(jarPath, cachePath);
+    }
+  }, 60000);
+
   it('throws when the remapped JAR does not exist', async () => {
     const svc = new BytecodeIndexService();
     await expect(

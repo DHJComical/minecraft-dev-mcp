@@ -38,8 +38,22 @@ describe('coerceFlagValue', () => {
   it('parses array / object types as JSON', () => {
     expect(coerceFlagValue('[1,2,3]', 'array')).toEqual([1, 2, 3]);
     expect(coerceFlagValue('{"a":1}', 'object')).toEqual({ a: 1 });
-    // Invalid JSON falls back to the raw string.
-    expect(coerceFlagValue('not json', 'array')).toBe('not json');
+  });
+
+  it('accepts a comma-separated list for array types', () => {
+    // Quoting a JSON array through cmd.exe/PowerShell is painful; the list form
+    // is what people actually type.
+    expect(coerceFlagValue('a.cfg,b.cfg', 'array')).toEqual(['a.cfg', 'b.cfg']);
+    expect(coerceFlagValue(' a.cfg , b.cfg ', 'array')).toEqual(['a.cfg', 'b.cfg']);
+    // A single value is still a one-element array, not a bare string.
+    expect(coerceFlagValue('C:/mod/META-INF/accesstransformer.cfg', 'array')).toEqual([
+      'C:/mod/META-INF/accesstransformer.cfg',
+    ]);
+  });
+
+  it('does not mistake a JSON object for an array element', () => {
+    // JSON that parses but isn't an array must not silently become one.
+    expect(coerceFlagValue('{"a":1}', 'array')).toEqual(['{"a":1}']);
   });
 });
 
@@ -81,6 +95,27 @@ describe('parseArgs', () => {
   it('does not consume a following flag as a value', () => {
     const { params } = parseArgs([TOOL, '--someFlag', '--version', '1.21.10']);
     expect(params).toEqual({ someFlag: true, version: '1.21.10' });
+  });
+
+  it('accumulates a repeated array flag instead of overwriting it', () => {
+    // validate_access_transformer.extraFiles is type "array" in the schema.
+    const { params } = parseArgs([
+      'validate_access_transformer',
+      '--content',
+      'at.cfg',
+      '--mcVersion',
+      '1.21.1',
+      '--extraFiles',
+      'a.cfg',
+      '--extraFiles',
+      'b.cfg',
+    ]);
+    expect(params.extraFiles).toEqual(['a.cfg', 'b.cfg']);
+  });
+
+  it('keeps last-wins for repeated non-array flags', () => {
+    const { params } = parseArgs([TOOL, '--version', '1.21.1', '--version', '1.21.10']);
+    expect(params.version).toBe('1.21.10');
   });
 
   it('rejects a bare -- flag with an empty key', () => {

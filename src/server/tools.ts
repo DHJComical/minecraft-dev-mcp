@@ -167,6 +167,12 @@ const ValidateAccessTransformerSchema = z.object({
     .describe('Access transformer .cfg content or path to file (supports WSL and Windows paths)'),
   mcVersion: z.string().describe('Minecraft version to validate against'),
   mapping: z.enum(['yarn', 'mojmap']).optional().describe('Mapping type (default: mojmap)'),
+  extraFiles: z
+    .array(z.string())
+    .optional()
+    .describe(
+      "Paths to the mod's OTHER access transformer files. They are not validated here (validate each on its own), but they are applied together at build time, so passing them catches cross-file conflicts and suppresses record-constructor notes for a ctor another file already widens.",
+    ),
 });
 
 const CompareVersionsDetailedSchema = z.object({
@@ -563,6 +569,12 @@ export const tools = [
           type: 'string',
           enum: ['yarn', 'mojmap'],
           description: 'Mapping type (default: mojmap)',
+        },
+        extraFiles: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            "Paths to the mod's OTHER access transformer files. Not validated here — pass them so cross-file conflicts are detected, since the loader applies every AT together.",
         },
       },
       required: ['content', 'mcVersion'],
@@ -1740,7 +1752,12 @@ export async function handleValidateAccessWidener(args: unknown) {
 
 // Handler for validate_access_transformer
 export async function handleValidateAccessTransformer(args: unknown) {
-  const { content, mcVersion, mapping = 'mojmap' } = ValidateAccessTransformerSchema.parse(args);
+  const {
+    content,
+    mcVersion,
+    mapping = 'mojmap',
+    extraFiles = [],
+  } = ValidateAccessTransformerSchema.parse(args);
 
   logger.info(`Validating access transformer for MC ${mcVersion} (${mapping})`);
 
@@ -1759,10 +1776,25 @@ export async function handleValidateAccessTransformer(args: unknown) {
       accessTransformer = atService.parseAccessTransformer(content);
     }
 
+    // Sibling AT files: parsed for cross-file conflict detection only. A path
+    // that doesn't exist is reported rather than ignored — silently dropping it
+    // would understate the conflict check the user asked for.
+    const missingExtras: string[] = [];
+    const additionalFiles: AccessTransformer[] = [];
+    for (const extra of extraFiles) {
+      const normalizedExtra = normalizePath(extra);
+      if (!existsSync(normalizedExtra)) {
+        missingExtras.push(extra);
+        continue;
+      }
+      additionalFiles.push(atService.parseAccessTransformerFile(normalizedExtra));
+    }
+
     const validation = await atService.validateAccessTransformer(
       accessTransformer,
       mcVersion,
       mapping as MappingType,
+      additionalFiles,
     );
 
     // Compact output: each finding is a one-line directive + message (not the
@@ -1793,6 +1825,9 @@ export async function handleValidateAccessTransformer(args: unknown) {
       plural(warnings.length, 'warning'),
     ];
     if (parseErrors.length) summaryParts.push(plural(parseErrors.length, 'parse error'));
+    if (additionalFiles.length) {
+      summaryParts.push(`${plural(additionalFiles.length, 'sibling file')} cross-checked`);
+    }
 
     return {
       content: [
@@ -1807,6 +1842,9 @@ export async function handleValidateAccessTransformer(args: unknown) {
               ...(errors.length ? { errors } : {}),
               ...(warnings.length ? { warnings } : {}),
               ...(parseErrors.length ? { parseErrors } : {}),
+              // Surfaced, never silently swallowed: a typo'd path would
+              // otherwise look like "no cross-file conflicts found".
+              ...(missingExtras.length ? { extraFilesNotFound: missingExtras } : {}),
             },
             null,
             2,

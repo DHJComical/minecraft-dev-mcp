@@ -342,6 +342,11 @@ export interface AccessTransformerEntry {
   wildcard?: boolean;
   /** 1-based source line. */
   line: number;
+  /**
+   * File this entry was parsed from, when known. Only set for entries parsed
+   * from a path — it exists so cross-file conflicts can name both files.
+   */
+  sourceFile?: string;
 }
 
 /** A line that could not be parsed (recorded, not fatal to the whole file). */
