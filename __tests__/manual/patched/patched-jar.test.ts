@@ -4,8 +4,10 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { getCacheManager } from '../../../src/cache/cache-manager.js';
 import { verifyJavaVersion } from '../../../src/java/java-process.js';
 import { handleCompareVersions } from '../../../src/server/tools.js';
+import { getAccessTransformerService } from '../../../src/services/access-transformer-service.js';
 import { getDecompileService } from '../../../src/services/decompile-service.js';
 import { getSearchIndexService } from '../../../src/services/search-index-service.js';
+import { inspectJar } from '../../../src/utils/jar-inspector.js';
 import { getDecompiledPath } from '../../../src/utils/paths.js';
 import {
   LOADER_PACKAGE_PREFIX,
@@ -32,7 +34,6 @@ const SKIP = !PATCHED_JAR_PATH || !existsSync(PATCHED_JAR_PATH);
 const describePatched = SKIP ? describe.skip : describe;
 
 if (SKIP) {
-  // biome-ignore lint/suspicious/noConsole: visible signal in CI logs about why we're skipping
   console.warn(
     `[patched-jar.test] Skipping: PATCHED_JAR_PATH is unset or does not exist (${PATCHED_JAR_PATH || '<empty>'})`,
   );
@@ -112,6 +113,36 @@ describePatched(`Manual: Patched MC JAR pipeline (${PATCHED_VERSION || 'no-versi
       const loaderClass = findFirstClassUnder(decompiledDir, LOADER_PACKAGE_PREFIX);
       expect(loaderClass).not.toBeNull();
     }, 30000);
+  });
+
+  describe('Access transformer validation (bytecode ground truth)', () => {
+    // The AT/AW validators read the REMAPPED JAR, which the patched flow does
+    // not produce by remapping — decompileLocalJar registers the input JAR as
+    // this key's remapped JAR instead. Without that, a NeoForge user gets
+    // "run decompile_minecraft_version first" right after decompiling.
+    const isSourcesJar = () => inspectJar(PATCHED_JAR_PATH as string).type === 'sources';
+
+    it("registers the patched JAR as the version key's remapped JAR", () => {
+      if (isSourcesJar()) return; // no bytecode exists in a sources-JAR flow
+      expect(getCacheManager().hasRemappedJar(PATCHED_VERSION, PATCHED_MAPPING)).toBe(true);
+    }, 30000);
+
+    it('validates an AT against the patched key without a "not available" error', async () => {
+      const svc = getAccessTransformerService();
+      // A class every patched MC JAR has, widened at class level only.
+      const at = svc.parseAccessTransformer('public net.minecraft.world.entity.Entity\n');
+      const validation = await svc.validateAccessTransformer(at, PATCHED_VERSION, PATCHED_MAPPING);
+
+      if (isSourcesJar()) {
+        // Sources JARs genuinely cannot be validated — but the message must
+        // explain that, not loop the user back to decompiling.
+        expect(validation.errors[0]?.message).toContain('sources JAR');
+        return;
+      }
+
+      expect(validation.errors.map((e) => e.message)).toEqual([]);
+      expect(validation.isValid).toBe(true);
+    }, 120000);
   });
 
   describe('Source retrieval', () => {
