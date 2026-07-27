@@ -33,7 +33,7 @@ import { descriptorToReadable as sharedDescriptorToReadable } from '../utils/des
 import { AccessWidenerParseError } from '../utils/errors.js';
 import { logger } from '../utils/logger.js';
 import { findSimilarName } from '../utils/suggestions.js';
-import { getBytecodeIndexService } from './bytecode-index-service.js';
+import { bytecodeUnavailableMessage, getBytecodeIndexService } from './bytecode-index-service.js';
 
 /** A map of internal class name (slashes, `$`) → its authoritative bytecode metadata. */
 type ClassBytecodeMap = Map<string, BytecodeClass>;
@@ -342,7 +342,7 @@ export class AccessWidenerService {
     if (!cacheManager.hasRemappedJar(mcVersion, mapping)) {
       errors.push({
         entry: firstEntry,
-        message: `Minecraft ${mcVersion} (${mapping}) is not available locally. Run decompile_minecraft_version first.`,
+        message: bytecodeUnavailableMessage(mcVersion, mapping),
       });
       return { isValid: false, errors, warnings };
     }
@@ -374,11 +374,23 @@ export class AccessWidenerService {
     }
 
     // JAR-wide class list for same-package "did you mean" suggestions on
-    // class-not-found errors. Central-directory scan only — no bytecode dumped.
-    const suggestionPool = getBytecodeIndexService().listClassNames(mcVersion, mapping);
+    // class-not-found errors. Built LAZILY: it reads the whole JAR's central
+    // directory, and a clean access widener never needs it.
+    let suggestionPool: string[] | undefined;
+    const getSuggestionPool = (): string[] => {
+      if (!suggestionPool) {
+        suggestionPool = getBytecodeIndexService().listClassNames(mcVersion, mapping);
+      }
+      return suggestionPool;
+    };
 
     for (const entry of accessWidener.entries) {
-      const validation = validateEntryAgainstBytecode(entry, classMap, suggestionPool);
+      const validation = validateEntryAgainstBytecode(
+        entry,
+        classMap,
+        // Only a missing class needs the pool — resolve it only then.
+        classMap.has(toInternalName(entry.className)) ? undefined : getSuggestionPool(),
+      );
       errors.push(
         ...validation.errors.map((message) => ({
           entry,

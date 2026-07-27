@@ -29,6 +29,13 @@ so it sees exactly what the AT is applied to at load time — the same facts
   than the class's new access and no file directive widens it.
 - **Constructors are never "overridable"** — the override-narrowing warning (§6.3)
   now excludes `<init>`/`<clinit>` (a prior false positive on `AnyOfCondition`).
+- **Patched Forge/NeoForge keys keep working.** The bytecode path resolves the
+  remapped JAR, but `decompileLocalJar` never remaps — so a *compiled* patched
+  JAR is registered (copied) as `remapped/{version}-{mapping}.jar`, which it
+  already is by definition (the caller asserts it is in `mapping`). Downstream
+  code needs no "is this patched?" branch. A patched *sources* JAR has no
+  bytecode at all; the validators detect that case and say so instead of looping
+  the user back to `decompile_minecraft_version`.
 - Needs only the **remapped JAR** (produced by `decompile_minecraft_version`);
   results are cached in a `remapped/{version}-{mapping}.bytecode.json` sidecar
   keyed by the JAR's size+mtime signature, so the cache is always fresh and

@@ -29,10 +29,32 @@ import { existsSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import AdmZip from 'adm-zip';
+import { getCacheManager } from '../cache/cache-manager.js';
 import { type BytecodeClass, getBytecodeDumper } from '../java/bytecode-dumper.js';
 import type { MappingType } from '../types/minecraft.js';
 import { logger } from '../utils/logger.js';
 import { getRemappedJarPath } from '../utils/paths.js';
+
+/**
+ * Explain why bytecode is unavailable for a (version, mapping), for the
+ * validators to surface verbatim.
+ *
+ * Two genuinely different situations, and telling them apart matters: if the
+ * version was never processed, "run decompile" is the fix; if it WAS processed
+ * but from a sources JAR (NFRT / ForgeGradle `-sources.jar`), there is no
+ * bytecode anywhere in that flow and re-running decompile changes nothing — the
+ * user needs a different input JAR or a vanilla version. Telling them to
+ * "decompile first" in that case sends them in a loop.
+ */
+export function bytecodeUnavailableMessage(version: string, mapping: MappingType): string {
+  if (getCacheManager().hasDecompiledSource(version, mapping)) {
+    const why = 'was decompiled from a sources JAR, which contains no bytecode';
+    const fix =
+      'Re-run decompile_minecraft_version with a COMPILED patched JAR (one containing .class entries), or validate against the vanilla Minecraft version instead.';
+    return `Minecraft ${version} (${mapping}) ${why} — validation needs compiled classes. ${fix}`;
+  }
+  return `Minecraft ${version} (${mapping}) is not available locally. Run decompile_minecraft_version first.`;
+}
 
 /** On-disk cache shape. `classes` maps an internal name → metadata, or `null` (known-absent). */
 interface BytecodeCacheFile {

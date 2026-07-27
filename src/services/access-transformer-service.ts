@@ -42,7 +42,7 @@ import { descriptorToReadable as sharedDescriptorToReadable } from '../utils/des
 import { AccessTransformerParseError } from '../utils/errors.js';
 import { logger } from '../utils/logger.js';
 import { findSimilarName } from '../utils/suggestions.js';
-import { getBytecodeIndexService } from './bytecode-index-service.js';
+import { bytecodeUnavailableMessage, getBytecodeIndexService } from './bytecode-index-service.js';
 
 /** A map of internal class name (slashes, `$`) → its authoritative bytecode metadata. */
 export type ClassBytecodeMap = Map<string, BytecodeClass>;
@@ -688,7 +688,7 @@ export class AccessTransformerService {
     if (!cacheManager.hasRemappedJar(mcVersion, mapping)) {
       errors.push({
         entry: firstEntry,
-        message: `Minecraft ${mcVersion} (${mapping}) is not available locally. Run decompile_minecraft_version first.`,
+        message: bytecodeUnavailableMessage(mcVersion, mapping),
       });
       return { isValid: false, errors, warnings };
     }
@@ -723,8 +723,15 @@ export class AccessTransformerService {
     }
 
     // JAR-wide class list for same-package "did you mean" suggestions on
-    // class-not-found errors. Central-directory scan only — no bytecode dumped.
-    const suggestionPool = getBytecodeIndexService().listClassNames(mcVersion, mapping);
+    // class-not-found errors. Built LAZILY: it reads the whole JAR's central
+    // directory, and a clean AT (the common case) never needs it.
+    let suggestionPool: string[] | undefined;
+    const getSuggestionPool = (): string[] => {
+      if (!suggestionPool) {
+        suggestionPool = getBytecodeIndexService().listClassNames(mcVersion, mapping);
+      }
+      return suggestionPool;
+    };
 
     // Validate each entry against bytecode.
     for (const entry of accessTransformer.entries) {
@@ -732,7 +739,9 @@ export class AccessTransformerService {
         entry,
         classMap,
         accessTransformer.entries,
-        suggestionPool,
+        // Only a missing class needs the pool, and that is exactly when the
+        // class is absent from classMap — so resolve it only then.
+        classMap.has(entry.className.replace(/\./g, '/')) ? undefined : getSuggestionPool(),
       );
       errors.push(
         ...validation.errors.map((message) => ({
