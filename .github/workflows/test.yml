@@ -13,6 +13,8 @@ on:
       - 'package-lock.json'
       - 'tsconfig.json'
       - 'vitest.config.ts'
+      # The prebuilt bytecode-dumper JAR is committed here, and the access
+      # transformer / widener / bytecode-index suites gate on it.
       - 'tools/bytecode-dumper/**'
       - '.github/workflows/test.yml'
   pull_request:
@@ -27,6 +29,8 @@ on:
       - 'package-lock.json'
       - 'tsconfig.json'
       - 'vitest.config.ts'
+      # The prebuilt bytecode-dumper JAR is committed here, and the access
+      # transformer / widener / bytecode-index suites gate on it.
       - 'tools/bytecode-dumper/**'
       - '.github/workflows/test.yml'
   workflow_dispatch:
@@ -72,14 +76,6 @@ jobs:
           ~/.config/minecraft-dev-mcp/remapped
           ~/.config/minecraft-dev-mcp/decompiled
         key: decompiled-mc-v1-${{ runner.os }}-1.21.11-yarn
-
-    # Every bytecode-backed test gates on this JAR existing and silently
-    # `describe.skip`s without it — so until this step existed, the access
-    # transformer / access widener / bytecode-index suites were green in CI
-    # purely by not running. Build it so those assertions actually execute.
-    - name: Build bytecode dumper
-      run: ./gradlew --no-daemon shadowJar
-      working-directory: tools/bytecode-dumper
 
     - name: Install dependencies
       run: npm ci
