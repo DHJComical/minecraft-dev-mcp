@@ -326,6 +326,13 @@ export class AccessWidenerService {
       return null;
     }
 
+    // Class names are kept EXACTLY as written. Access wideners are slash-only —
+    // Fabric's AccessWidenerReader rejects dots outright ("Class-names must be
+    // specified as a/b/C, not a.b.C") — so normalizing to dots here made every
+    // echoed directive and every corrected-directive suggestion invalid to paste
+    // back into the file. Lookups go through toInternalName(), which normalizes
+    // either form, so preserving the user's notation costs nothing and keeps our
+    // messages in the same notation as their file.
     // Parse based on target type
     if (targetType === 'class') {
       // Format: accessible class net/minecraft/entity/Entity
@@ -333,7 +340,7 @@ export class AccessWidenerService {
       return {
         accessType,
         targetType,
-        className: parts[2].replace(/\//g, '.'),
+        className: parts[2],
         line: lineNum,
       };
     }
@@ -344,7 +351,7 @@ export class AccessWidenerService {
       return {
         accessType,
         targetType,
-        className: parts[2].replace(/\//g, '.'),
+        className: parts[2],
         memberName: parts[3],
         memberDescriptor: parts[4],
         line: lineNum,
@@ -357,7 +364,7 @@ export class AccessWidenerService {
       return {
         accessType,
         targetType,
-        className: parts[2].replace(/\//g, '.'),
+        className: parts[2],
         memberName: parts[3],
         memberDescriptor: parts[4],
         line: lineNum,
