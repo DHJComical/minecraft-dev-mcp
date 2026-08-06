@@ -1,7 +1,8 @@
-import { rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync as nodeExistsSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type {
   BytecodeClass,
   BytecodeField,
@@ -14,7 +15,22 @@ import {
 } from '../../src/services/access-widener-service.js';
 import type { AccessWidenerEntry } from '../../src/types/minecraft.js';
 import { AccessWidenerParseError } from '../../src/utils/errors.js';
+import { ensureDir } from '../../src/utils/file-utils.js';
+import { getRemappedJarPath } from '../../src/utils/paths.js';
 import { TEST_MAPPING, TEST_VERSION } from '../test-constants.js';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const FIXTURE_JAR = join(__dirname, '..', 'fixtures', 'summoningrituals-mc-stubs.jar');
+const DUMPER_JAR = join(
+  __dirname,
+  '..',
+  '..',
+  'tools',
+  'bytecode-dumper',
+  'build',
+  'libs',
+  'bytecode-dumper-1.0.0.jar',
+);
 
 /**
  * Build an AccessWidenerEntry with sensible defaults for the regression tests
@@ -104,7 +120,8 @@ mutable field net/minecraft/entity/Entity age I
 
     const classEntry = aw.entries.find((e) => e.targetType === 'class');
     expect(classEntry).toBeDefined();
-    expect(classEntry?.className).toBe('net.minecraft.entity.Entity');
+    // Slashes, exactly as written: access wideners are a slash-only format.
+    expect(classEntry?.className).toBe('net/minecraft/entity/Entity');
 
     const methodEntry = aw.entries.find((e) => e.targetType === 'method');
     expect(methodEntry).toBeDefined();
@@ -227,8 +244,10 @@ accessible class net/minecraft/entity/Entity
     );
 
     // Round-trip: parsing the generated text yields the same entries (ignoring
-    // the parse-added `line` field). Covers class/method/field targets and
-    // accessible/extendable/mutable access types.
+    // the parse-added `line` field, and with class names in the slash notation
+    // the format mandates — `generateAccessWidener` accepts either and always
+    // emits slashes, and the parser now preserves what it reads). Covers
+    // class/method/field targets and accessible/extendable/mutable access types.
     const parsed = awService.parseAccessWidener(generated);
     expect(parsed.namespace).toBe('named');
     expect(parsed.version).toBe(2);
@@ -241,7 +260,7 @@ accessible class net/minecraft/entity/Entity
         memberName: e.memberName,
         memberDescriptor: e.memberDescriptor,
       })),
-    ).toEqual(entries);
+    ).toEqual(entries.map((e) => ({ ...e, className: e.className.replace(/\./g, '/') })));
   });
 
   it('generateAccessWidener writes the mapping namespace in the header for non-yarn', () => {
@@ -279,7 +298,7 @@ accessible class net/minecraft/entity/Entity
       expect(aw.namespace).toBe('named');
       expect(aw.version).toBe(2);
       expect(aw.entries).toHaveLength(2);
-      expect(aw.entries[0]?.className).toBe('net.minecraft.block.Block');
+      expect(aw.entries[0]?.className).toBe('net/minecraft/block/Block');
       expect(aw.entries[1]?.memberName).toBe('getState');
     } finally {
       rmSync(filePath, { force: true });
@@ -532,4 +551,246 @@ describe('Access Widener Validation (bytecode + descriptor matching)', () => {
     expect(res.errors.some((e) => e.includes('Class not found'))).toBe(true);
     expect(res.suggestion).toContain('Ghosts');
   });
+});
+
+/**
+ * Inherited members. Fabric's AccessWidenerClassVisitor looks a member up as
+ * EntryTriple(className, name, descriptor) against the class it is visiting, and
+ * AccessWidener resolves that through a plain HashMap with no superclass
+ * fallback — so an entry naming a subclass for an inherited member widens
+ * nothing at all. Same rule as Forge/NeoForge ATs, same shared walk.
+ */
+describe('Access Widener inherited members', () => {
+  const BASE = bcClass({
+    name: 'net/test/Base',
+    methods: [bcMethod('tick', '()V', ['protected'])],
+    fields: [bcField('ticks', 'I', ['private'])],
+  });
+  const CHILD = bcClass({ name: 'net/test/Child', superName: 'net/test/Base' });
+
+  it('reports the declaring superclass for an inherited method', () => {
+    const res = validateEntryAgainstBytecode(
+      makeEntry({
+        targetType: 'method',
+        className: 'net/test/Child',
+        memberName: 'tick',
+        memberDescriptor: '()V',
+      }),
+      mapOf(CHILD, BASE),
+    );
+    expect(res.errors[0]).toContain("Method 'tick' is not declared in net/test/Child");
+    expect(res.errors[0]).toContain('inherited from net/test/Base');
+    expect(res.errors[0]).toContain('has no effect');
+    // Corrected line keeps AW's internal-name (slash) directive form.
+    expect(res.suggestion).toBe('Use: accessible method net/test/Base tick ()V');
+  });
+
+  it('reports the declaring superclass for an inherited field', () => {
+    const res = validateEntryAgainstBytecode(
+      makeEntry({
+        accessType: 'mutable',
+        targetType: 'field',
+        className: 'net/test/Child',
+        memberName: 'ticks',
+        memberDescriptor: 'I',
+      }),
+      mapOf(CHILD, BASE),
+    );
+    expect(res.errors[0]).toContain('inherited from net/test/Base');
+    expect(res.suggestion).toBe('Use: mutable field net/test/Base ticks I');
+  });
+
+  it('finds interface default methods', () => {
+    const iface = bcClass({
+      name: 'net/test/Tickable',
+      isInterface: true,
+      methods: [bcMethod('tick', '()V')],
+    });
+    const impl = bcClass({ name: 'net/test/Impl', interfaces: ['net/test/Tickable'] });
+    const res = validateEntryAgainstBytecode(
+      makeEntry({
+        targetType: 'method',
+        className: 'net/test/Impl',
+        memberName: 'tick',
+        memberDescriptor: '()V',
+      }),
+      mapOf(impl, iface),
+    );
+    expect(res.errors[0]).toContain('inherited from net/test/Tickable');
+  });
+
+  it('stays silent when the class declares the member itself', () => {
+    const overriding = bcClass({
+      name: 'net/test/Child',
+      superName: 'net/test/Base',
+      methods: [bcMethod('tick', '()V')],
+    });
+    const res = validateEntryAgainstBytecode(
+      makeEntry({
+        targetType: 'method',
+        className: 'net/test/Child',
+        memberName: 'tick',
+        memberDescriptor: '()V',
+      }),
+      mapOf(overriding, BASE),
+    );
+    expect(res.errors).toEqual([]);
+  });
+
+  it('never blames a parent for a missing constructor', () => {
+    const parent = bcClass({
+      name: 'net/test/Parent',
+      methods: [bcMethod('<init>', '(I)V', ['protected'])],
+    });
+    const child = bcClass({ name: 'net/test/Kid', superName: 'net/test/Parent' });
+    const res = validateEntryAgainstBytecode(
+      makeEntry({
+        targetType: 'method',
+        className: 'net/test/Kid',
+        memberName: '<init>',
+        memberDescriptor: '(I)V',
+      }),
+      mapOf(child, parent),
+    );
+    expect(res.errors[0]).toContain('not found');
+    expect(res.errors[0]).not.toContain('inherited');
+  });
+
+  it('still reports plain "not found" when no ancestor declares it', () => {
+    const res = validateEntryAgainstBytecode(
+      makeEntry({
+        targetType: 'field',
+        className: 'net/test/Child',
+        memberName: 'nope',
+        memberDescriptor: 'I',
+      }),
+      mapOf(CHILD, BASE),
+    );
+    expect(res.errors[0]).toBe("Field 'nope' not found in net/test/Child");
+  });
+});
+
+// --- Tool-level output rendering --------------------------------------------
+//
+// Everything above proves the FINDING is produced. These prove it survives
+// `handleValidateAccessWidener`'s compact() mapping into the JSON an LLM
+// actually reads — a finding that never reaches the output is indistinguishable
+// from no finding at all. The pre-existing tool tests only assert the envelope
+// shape (`typeof valid === 'boolean'`), so nothing pinned the payload.
+
+/** Stage the committed stub JAR as a version key's remapped JAR (no remapping). */
+function stageRemappedStub(version: string, mapping: string): () => void {
+  const jarPath = getRemappedJarPath(version, mapping);
+  ensureDir(dirname(jarPath));
+  copyFileSync(FIXTURE_JAR, jarPath);
+  return () => {
+    rmSync(jarPath, { force: true });
+    // The dumper writes a sidecar next to the JAR; leaving it litters the
+    // shared cache and would shadow a later real JAR under the same key.
+    rmSync(jarPath.replace(/\.jar$/i, '.bytecode.json'), { force: true });
+  };
+}
+
+describe('validate_access_widener tool output', () => {
+  it('echoes directives in slash notation so they can be pasted back', async () => {
+    // Fabric's AccessWidenerReader hard-errors on dotted class names ("Class-
+    // names must be specified as a/b/C, not a.b.C"), so a dotted directive in
+    // our output is not merely cosmetic — pasting it breaks the build.
+    const line = 'accessible class net/minecraft/entity/Entity';
+    const result = await handleValidateAccessWidener({
+      content: `accessWidener v2 named\n${line}\n`,
+      mcVersion: '0.0.0-never-decompiled',
+      mapping: 'mojmap',
+    });
+
+    const data = JSON.parse(result.content[0].text);
+    for (const finding of [...(data.errors ?? []), ...(data.warnings ?? [])]) {
+      expect(finding.directive).not.toMatch(/\bnet\.minecraft\./);
+    }
+  }, 30000);
+
+  it('reports missing bytecode as a verdict, not a tool error', async () => {
+    const result = await handleValidateAccessWidener({
+      content: 'accessWidener v2 named\naccessible class net/minecraft/entity/Entity\n',
+      mcVersion: '0.0.0-never-decompiled',
+      mapping: 'mojmap',
+    });
+
+    // The tool RAN; the widener is what's unverifiable. Flipping isError here
+    // would surface as a broken tool rather than an actionable next step.
+    expect(result.isError).toBeFalsy();
+    const data = JSON.parse(result.content[0].text);
+    expect(data.valid).toBe(false);
+    expect(data.errors[0].message).toContain('decompile_minecraft_version');
+  }, 30000);
+
+  it('accepts a file path as content, not just inline text', async () => {
+    const file = join(tmpdir(), `aw-tool-${process.pid}.accesswidener`);
+    writeFileSync(file, 'accessWidener v2 named\naccessible class net/minecraft/entity/Entity\n');
+    try {
+      const result = await handleValidateAccessWidener({
+        content: file,
+        mcVersion: TEST_VERSION,
+        mapping: TEST_MAPPING,
+      });
+      const data = JSON.parse(result.content[0].text);
+      // Proves the existsSync(content) branch parsed the FILE: inline-parsing a
+      // path string yields zero entries, so the count is the discriminator.
+      expect(data.summary).toContain('1 entry');
+      expect(data.namespace).toBe('named');
+    } finally {
+      rmSync(file, { force: true });
+    }
+  }, 30000);
+});
+
+const describeRendered =
+  nodeExistsSync(DUMPER_JAR) && nodeExistsSync(FIXTURE_JAR) ? describe : describe.skip;
+
+describeRendered('validate_access_widener tool output (real stub bytecode)', () => {
+  const VERSION = '0.0.0-aw-tool-test';
+  const MAPPING = 'mojmap';
+  const PKG = 'net/minecraft/world/level/storage/loot/predicates';
+  let cleanup: () => void;
+
+  beforeEach(() => {
+    cleanup = stageRemappedStub(VERSION, MAPPING);
+  });
+  afterEach(() => cleanup());
+
+  it('surfaces the inherited-member fix as a pasteable directive', async () => {
+    // `terms` is declared on CompositeLootItemCondition; an AW naming the
+    // subclass widens nothing at all.
+    const line = `accessible field ${PKG}/AnyOfCondition terms Ljava/util/List;`;
+    const result = await handleValidateAccessWidener({
+      content: `accessWidener v2 named\n${line}\n`,
+      mcVersion: VERSION,
+      mapping: MAPPING,
+    });
+
+    const data = JSON.parse(result.content[0].text);
+    expect(data.valid).toBe(false);
+    expect(data.errors).toHaveLength(1);
+    expect(data.errors[0].line).toBe(2);
+    expect(data.errors[0].directive).toBe(line);
+    expect(data.errors[0].message).toContain('inherited from');
+    expect(data.errors[0].message).toContain(`${PKG}/CompositeLootItemCondition`);
+    // The whole point: the user can paste this over their broken line.
+    expect(data.errors[0].suggestion).toContain(
+      `accessible field ${PKG}/CompositeLootItemCondition terms Ljava/util/List;`,
+    );
+  }, 60000);
+
+  it('stays clean for a member the named class declares itself', async () => {
+    const result = await handleValidateAccessWidener({
+      content: `accessWidener v2 named\naccessible field ${PKG}/CompositeLootItemCondition terms Ljava/util/List;\n`,
+      mcVersion: VERSION,
+      mapping: MAPPING,
+    });
+
+    const data = JSON.parse(result.content[0].text);
+    expect(data.valid).toBe(true);
+    expect(data.summary).toContain('0 errors');
+    expect(data.errors).toBeUndefined();
+  }, 60000);
 });

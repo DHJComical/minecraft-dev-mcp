@@ -1116,4 +1116,41 @@ describe('validate_access_transformer tool', () => {
     expect(data.parseErrors.length).toBeGreaterThan(0);
     expect(data.summary).toMatch(/parse error/);
   }, 30000);
+
+  it('detects a conflict against a sibling AT passed via extraFiles', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'at-extra-'));
+    const sibling = join(dir, 'other.cfg');
+    writeFileSync(sibling, 'private net.mc.Example exampleField\n', 'utf8');
+    try {
+      const result = await handleValidateAccessTransformer({
+        content: 'public net.mc.Example exampleField',
+        mcVersion: TEST_VERSION,
+        extraFiles: [sibling],
+      });
+      const data = JSON.parse(result.content[0]?.text ?? '');
+
+      expect(data.summary).toContain('1 sibling file cross-checked');
+      const conflict = (data.errors ?? []).find((e: { message: string }) =>
+        e.message.includes('Conflicting'),
+      );
+      expect(conflict).toBeDefined();
+      expect(conflict.message).toContain('different files');
+      expect(conflict.message).toContain('other.cfg');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30000);
+
+  it('reports an extraFiles path that does not exist rather than ignoring it', async () => {
+    const missing = join(tmpdir(), 'definitely-not-here-at.cfg');
+    const result = await handleValidateAccessTransformer({
+      content: 'public net.mc.Example',
+      mcVersion: TEST_VERSION,
+      extraFiles: [missing],
+    });
+    const data = JSON.parse(result.content[0]?.text ?? '');
+    // Silently dropping it would read as "no cross-file conflicts found".
+    expect(data.extraFilesNotFound).toEqual([missing]);
+    expect(data.summary).not.toContain('sibling file');
+  }, 30000);
 });

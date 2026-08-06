@@ -73,10 +73,21 @@ describe('patched JAR bytecode availability (Forge/NeoForge)', () => {
     versions.clear();
   });
 
+  /**
+   * Track the whole `decompiled/{version}` tree, not just the mapping subdir —
+   * removing only the latter leaves an empty version folder behind in the real
+   * shared cache.
+   */
+  function trackDecompiledTree(version: string): string {
+    const mappingDir = getDecompiledPath(version, MAPPING);
+    track(dirname(mappingDir));
+    return mappingDir;
+  }
+
   /** Pretend this version key was already decompiled (no VineFlower needed). */
   function stageDecompiledSource(version: string): void {
     versions.add(version);
-    const dir = track(getDecompiledPath(version, MAPPING));
+    const dir = trackDecompiledTree(version);
     mkdirSync(join(dir, 'net', 'minecraft'), { recursive: true });
     writeFileSync(join(dir, 'net', 'minecraft', 'Marker.java'), 'class Marker {}\n', 'utf8');
   }
@@ -139,7 +150,7 @@ describe('patched JAR bytecode availability (Forge/NeoForge)', () => {
     const version = `${PATCHED_VERSION}-sources`;
     versions.add(version);
     const sourcesJar = makeSourcesJar();
-    track(getDecompiledPath(version, MAPPING));
+    trackDecompiledTree(version);
     const remapped = track(getRemappedJarPath(version, MAPPING));
 
     const result = await new DecompileService().decompileLocalJar(sourcesJar, version, MAPPING);

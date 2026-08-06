@@ -42,7 +42,22 @@ export function coerceFlagValue(value: string, expectedType?: string): unknown {
     }
     case 'boolean':
       return value === 'true' || value === '1';
-    case 'array':
+    case 'array': {
+      // JSON first (`--types '["class","method"]'`), then the form people
+      // actually type: a comma-separated list. Quoting a JSON array through
+      // cmd.exe/PowerShell is miserable, and every array param here is a list
+      // of simple tokens (paths, packages, kinds) where commas don't occur.
+      try {
+        const parsed: unknown = JSON.parse(value);
+        if (Array.isArray(parsed)) return parsed;
+      } catch {
+        // not JSON — fall through to comma splitting
+      }
+      return value
+        .split(',')
+        .map((part) => part.trim())
+        .filter(Boolean);
+    }
     case 'object':
       try {
         return JSON.parse(value);
@@ -180,7 +195,16 @@ export function parseArgs(args: string[]): ParsedArgs {
       // Bare flag (no value) -> boolean true
       params[key] = true;
     } else {
-      params[key] = coerceFlagValue(value, properties?.[key]?.type);
+      const expectedType = properties?.[key]?.type;
+      const coerced = coerceFlagValue(value, expectedType);
+      const existing = params[key];
+      // Repeating an array flag appends instead of overwriting, so both
+      // `--extraFiles a.cfg --extraFiles b.cfg` and `--extraFiles a.cfg,b.cfg`
+      // work. Non-array flags keep last-wins.
+      params[key] =
+        expectedType === 'array' && Array.isArray(existing) && Array.isArray(coerced)
+          ? [...existing, ...coerced]
+          : coerced;
     }
   }
 

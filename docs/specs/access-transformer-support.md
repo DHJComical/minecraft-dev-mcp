@@ -46,6 +46,59 @@ design and are superseded by this note.
 
 ---
 
+## 0b. Update — inherited members and cross-file conflicts
+
+Closes the two quirks from issue #12 that the bytecode switch made tractable but
+did not itself address.
+
+**Inherited members.** rlnt's opening line — "what's special about ATs is that
+parent classes also need access transformation". An AT transforms ONLY the class
+it names: a directive aimed at a member the class merely inherits is silently
+inert. Nothing fails at build time, nothing crashes at load; the member is just
+still inaccessible, which is the worst possible failure shape.
+
+`BytecodeIndexService.getClassBytecodeWithHierarchy` resolves the ancestor
+closure — transitive `superName` plus interfaces (for default methods) — in
+rounds, because a parent is only discoverable FROM its child's class file.
+Ancestors outside the JAR (`java/lang/Object`, library types) never come back
+from the dumper and are skipped rather than reported missing. When a member is
+absent from the named class, `findDeclaringAncestor` walks that closure
+superclass-first and, on a hit, reports the declarer and the paste-ready
+corrected directive instead of "not found". The check runs BEFORE the descriptor
+-mismatch branch too: a class declaring `tick(I)V` while the AT asks for
+`tick()V` is an inherited-member problem, not a typo'd descriptor.
+
+**Cross-file conflicts.** Mods routinely ship more than one AT and the loader
+applies them together, so a conflict between two files fails the Forge build
+exactly like one inside a file. `validate_access_transformer` takes an optional
+`extraFiles: string[]`. Those files are NOT validated against bytecode (validate
+each on its own call); they join the union used for the cross-entry checks where
+a second file legitimately changes the answer:
+
+- duplicate/conflict detection, with findings naming both files and lines;
+- the record canonical-constructor note, suppressed when a sibling file widens
+  the ctor (it IS widened at runtime).
+
+Findings are restricted to those involving the file under validation, so
+checking `a.cfg` never re-reports an argument that exists purely between `b.cfg`
+and `c.cfg` — each file surfaces its own. Entries parsed from a path carry
+`sourceFile`; an entry without one came from inline content and is still treated
+as a distinct file for attribution purposes.
+
+**Access wideners get the same treatment.** Verified against Fabric's own
+implementation rather than assumed: `AccessWidenerClassVisitor` looks a member up
+as `EntryTriple(className, name, descriptor)` for the class it is currently
+visiting, and `AccessWidener` resolves that through a plain `HashMap` with no
+superclass fallback — so an AW entry naming a subclass for an inherited member
+widens nothing, exactly like an AT. The walk itself therefore lives in
+`src/utils/bytecode-hierarchy.ts` (`ancestorsOf`, `findDeclaringAncestor`) and
+both validators share it; only the corrected-directive rendering differs, since
+AT and AW have different directive grammars. The AW message renders the declarer
+in whichever notation the entry used (the AW parser dot-normalizes class names)
+while the pasteable `Use:` line keeps AW's on-disk slash form.
+
+---
+
 ## 1. Goal
 
 Add a `validate_access_transformer` MCP tool, parallel to the existing `validate_access_widener`, but for the **Forge/NeoForge** Access Transformer (AT) ecosystem. A validator must parse `.cfg` entries, check signatures, and catch AT-specific quirks.

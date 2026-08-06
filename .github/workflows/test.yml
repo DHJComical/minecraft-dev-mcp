@@ -13,6 +13,9 @@ on:
       - 'package-lock.json'
       - 'tsconfig.json'
       - 'vitest.config.ts'
+      # The prebuilt bytecode-dumper JAR is committed here, and the access
+      # transformer / widener / bytecode-index suites gate on it.
+      - 'tools/bytecode-dumper/**'
       - '.github/workflows/test.yml'
   pull_request:
     branches: [ main ]
@@ -26,6 +29,9 @@ on:
       - 'package-lock.json'
       - 'tsconfig.json'
       - 'vitest.config.ts'
+      # The prebuilt bytecode-dumper JAR is committed here, and the access
+      # transformer / widener / bytecode-index suites gate on it.
+      - 'tools/bytecode-dumper/**'
       - '.github/workflows/test.yml'
   workflow_dispatch:
 
