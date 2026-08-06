@@ -1,6 +1,6 @@
 {
   "name": "@mcdxai/minecraft-dev-mcp",
-  "version": "1.2.5",
+  "version": "1.3.0",
   "description": "MCP server and CLI for Minecraft mod development - decompile, remap, and explore Minecraft source code",
   "type": "module",
   "main": "./dist/index.js",
@@ -11,6 +11,7 @@
   "files": [
     "dist",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE",
     "tools/mapping-io-cli/build/libs/*.jar",
     "tools/bytecode-dumper/build/libs/*.jar"
