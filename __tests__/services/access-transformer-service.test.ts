@@ -1062,6 +1062,94 @@ describe('Conflict detection', () => {
     expect(warnings).toEqual([]);
   });
 
+  /**
+   * Cross-file conflicts, exercised HERE rather than through the tool handler.
+   * `validateAccessTransformer` short-circuits on a missing remapped JAR before
+   * it ever reaches conflict detection, so a tool-level assertion on the
+   * conflict message only passes when 1.21.11/mojmap happens to be remapped on
+   * disk — which in CI is a race against the suites that remap it. The union +
+   * `restrictTo` wiring the handler depends on is pure, so test it purely; the
+   * handler's own extraFiles plumbing is covered by the tool tests below.
+   *
+   * Parsing mirrors the handler exactly: inline content (no `sourceFile`) for
+   * the file under validation, `parseAccessTransformerFile` (which tags each
+   * entry with its path) for siblings.
+   */
+  describe('across sibling AT files', () => {
+    const svc = getAccessTransformerService();
+
+    /** Parse `primary` inline and each sibling from a real file on disk. */
+    const parseWithSiblings = (
+      primary: string,
+      siblings: Record<string, string>,
+    ): { entries: AccessTransformerEntry[]; own: Set<AccessTransformerEntry>; dir: string } => {
+      const dir = mkdtempSync(join(tmpdir(), 'at-conflict-'));
+      const ownEntries = svc.parseAccessTransformer(primary).entries;
+      const siblingEntries: AccessTransformerEntry[] = [];
+      for (const [name, content] of Object.entries(siblings)) {
+        const path = join(dir, name);
+        writeFileSync(path, content, 'utf8');
+        siblingEntries.push(...svc.parseAccessTransformerFile(path).entries);
+      }
+      return {
+        entries: [...ownEntries, ...siblingEntries],
+        own: new Set(ownEntries),
+        dir,
+      };
+    };
+
+    it('names both files when a conflict spans two ATs', () => {
+      const { entries, own, dir } = parseWithSiblings('public net.mc.Example exampleField', {
+        'other.cfg': 'private net.mc.Example exampleField\n',
+      });
+      try {
+        const { errors } = detectAccessTransformerConflicts(entries, own);
+        expect(errors).toHaveLength(1);
+        const message = errors[0]?.message ?? '';
+        expect(message).toContain('Conflicting');
+        expect(message).toContain('different files');
+        // The sibling is named by path; the inline file reads as "this file".
+        expect(message).toContain('other.cfg');
+        expect(message).toContain('this file');
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('reports a duplicate across files with both filenames', () => {
+      const { entries, own, dir } = parseWithSiblings('public net.mc.Example exampleField', {
+        'other.cfg': 'public net.mc.Example exampleField\n',
+      });
+      try {
+        const { errors, warnings } = detectAccessTransformerConflicts(entries, own);
+        expect(errors).toEqual([]);
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0]?.message).toContain('Duplicate');
+        expect(warnings[0]?.message).toContain('other.cfg');
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('does not report a conflict that exists purely between two siblings', () => {
+      // `restrictTo` is the file under validation. A vs B is B and C's problem —
+      // validating A must not re-report it, or every file in a mod repeats it.
+      const { entries, own, dir } = parseWithSiblings('public net.mc.Example untouchedField', {
+        'b.cfg': 'public net.mc.Example exampleField\n',
+        'c.cfg': 'private net.mc.Example exampleField\n',
+      });
+      try {
+        const { errors, warnings } = detectAccessTransformerConflicts(entries, own);
+        expect(errors).toEqual([]);
+        expect(warnings).toEqual([]);
+        // Without the restriction the same union does surface it.
+        expect(detectAccessTransformerConflicts(entries).errors).toHaveLength(1);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  });
+
   it('validateAccessTransformer short-circuits on a non-decompiled version', async () => {
     // Confirms the guard path: without a remapped JAR (produced by decompiling),
     // the validator reports the missing-source error and never reaches conflict
@@ -1117,7 +1205,12 @@ describe('validate_access_transformer tool', () => {
     expect(data.summary).toMatch(/parse error/);
   }, 30000);
 
-  it('detects a conflict against a sibling AT passed via extraFiles', async () => {
+  it('reads and cross-checks a sibling AT passed via extraFiles', async () => {
+    // Handler plumbing only: the sibling is found, parsed, and counted into the
+    // summary. The resulting conflict FINDING is asserted purely in the
+    // 'across sibling AT files' block above — reaching conflict detection here
+    // would require 1.21.11/mojmap to be remapped on disk, which is not
+    // guaranteed (see the short-circuit test on the missing remapped JAR).
     const dir = mkdtempSync(join(tmpdir(), 'at-extra-'));
     const sibling = join(dir, 'other.cfg');
     writeFileSync(sibling, 'private net.mc.Example exampleField\n', 'utf8');
@@ -1130,12 +1223,8 @@ describe('validate_access_transformer tool', () => {
       const data = JSON.parse(result.content[0]?.text ?? '');
 
       expect(data.summary).toContain('1 sibling file cross-checked');
-      const conflict = (data.errors ?? []).find((e: { message: string }) =>
-        e.message.includes('Conflicting'),
-      );
-      expect(conflict).toBeDefined();
-      expect(conflict.message).toContain('different files');
-      expect(conflict.message).toContain('other.cfg');
+      // Found, so it is not reported as missing.
+      expect(data.extraFilesNotFound).toBeUndefined();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

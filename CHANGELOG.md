@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Flaky cross-file AT conflict test on a cold CI cache.** The tool-level test
+  for `extraFiles` conflict detection asserted the conflict *finding* through
+  `handleValidateAccessTransformer`, which reaches conflict detection only after
+  `validateAccessTransformer` clears its remapped-JAR guard. ATs default to
+  `mojmap`, but CI only pre-decompiles `1.21.11/yarn` — the mojmap remap happens
+  as a side effect of another suite running in parallel, so on a cold cache the
+  assertion raced it and failed. It passed otherwise only because the
+  yarn-keyed cache incidentally carries the mojmap JAR. The conflict findings
+  (cross-file naming, duplicates, `restrictTo` scoping) now assert against the
+  pure `detectAccessTransformerConflicts`, with entries parsed exactly as the
+  handler parses them; the tool test keeps the bytecode-independent plumbing
+  assertions. No production code changed.
+
 ## [1.3.0] - 2026-08-06
 
 Completes the access transformer work tracked in
