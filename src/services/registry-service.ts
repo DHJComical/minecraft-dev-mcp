@@ -1,10 +1,26 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { getDataGenerator } from '../java/mc-data-gen.js';
+import { RegistryExtractionError } from '../utils/errors.js';
 import { ensureDir } from '../utils/file-utils.js';
 import { logger } from '../utils/logger.js';
 import { getRegistryPath } from '../utils/paths.js';
 import { getVersionManager } from './version-manager.js';
+
+/**
+ * Registry data generator (`net.minecraft.data.Main`) was added in Minecraft
+ * 1.13. Versions 1.12.2 and earlier have no data generator, so registry
+ * extraction is not supported for them — the server JAR is fully obfuscated
+ * and cannot enumerate registries without the generator.
+ */
+function isPreDataGenVersion(version: string): boolean {
+  const m = version.match(/^(\d+)\.(\d+)\.?/);
+  if (!m) return false;
+  const major = Number.parseInt(m[1], 10);
+  const minor = Number.parseInt(m[2], 10);
+  if (major !== 1) return false;
+  return minor < 13;
+}
 
 /**
  * Service for extracting and caching Minecraft registry data
@@ -17,6 +33,7 @@ export class RegistryService {
    * Get registry data for a version
    */
   async getRegistryData(version: string, registryType?: string): Promise<Record<string, unknown>> {
+    this.throwIfUnsupported(version);
     // Get the actual registries.json file path (may be in different locations)
     const registriesFile = await this.getRegistriesFilePath(version);
 
@@ -33,6 +50,21 @@ export class RegistryService {
     }
 
     return allRegistries;
+  }
+
+  /**
+   * Throw a clear error for versions without the Minecraft data generator
+   * (1.12.2 and earlier) instead of failing obscurely inside the Java process.
+   */
+  private throwIfUnsupported(version: string): void {
+    if (isPreDataGenVersion(version)) {
+      throw new RegistryExtractionError(
+        version,
+        `Registry extraction is not supported for Minecraft ${version}: the data generator ` +
+          `(net.minecraft.data.Main / --reports) was introduced in 1.13, and ${version} ships ` +
+          `a fully obfuscated JAR without one. Only 1.13+ versions are supported.`,
+      );
+    }
   }
 
   /**

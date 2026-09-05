@@ -40,7 +40,11 @@ const GetMinecraftSourceSchema = z.object({
   className: z
     .string()
     .describe('Fully qualified class name (e.g., "net.minecraft.world.entity.Entity")'),
-  mapping: z.enum(['yarn', 'mojmap']).describe('Mapping type to use'),
+  mapping: z
+    .enum(['yarn', 'mojmap', 'mcp'])
+    .describe(
+      'Mapping type to use. `yarn` is Fabric/Quilt only. `mojmap` is Mojang official names (1.14.4+). `mcp` is Forge MCP names for pre-1.14.4 versions (e.g. 1.12.2).',
+    ),
   startLine: z
     .number()
     .int()
@@ -71,9 +75,9 @@ const DecompileMinecraftVersionSchema = z
         'Minecraft version to decompile. When `jarPath` is provided this is treated as an opaque cache key — the conventional schema is `<mc>-<loader>-<loaderVersion>` (e.g., `1.21.1-neoforge-21.1.72`).',
       ),
     mapping: z
-      .enum(['yarn', 'mojmap'])
+      .enum(['yarn', 'mojmap', 'mcp'])
       .describe(
-        'Mapping type to use. `yarn` is Fabric/Quilt only. Forge/NeoForge dev environments (1.17+) are mojmap-exclusive — when `jarPath` is provided, this must be `mojmap`.',
+        'Mapping type to use. `yarn` is Fabric/Quilt only. Forge/NeoForge dev environments (1.17+) are mojmap-exclusive — when `jarPath` is provided, this must be `mojmap`. `mcp` is Forge MCP names for pre-1.14.4 versions (e.g. 1.12.2).',
       ),
     force: z
       .boolean()
@@ -118,10 +122,10 @@ const FindMappingSchema = z.object({
   symbol: z.string().describe('Symbol name to look up (class name, method name, or field name)'),
   version: z.string().describe('Minecraft version'),
   sourceMapping: z
-    .enum(['yarn', 'mojmap', 'intermediary', 'official'])
+    .enum(['yarn', 'mojmap', 'intermediary', 'official', 'mcp'])
     .describe('Source mapping type'),
   targetMapping: z
-    .enum(['yarn', 'mojmap', 'intermediary', 'official'])
+    .enum(['yarn', 'mojmap', 'intermediary', 'official', 'mcp'])
     .describe('Target mapping type'),
 });
 
@@ -129,14 +133,14 @@ const SearchMinecraftCodeSchema = z.object({
   version: z.string().describe('Minecraft version'),
   query: z.string().describe('Search query (regex pattern or literal string)'),
   searchType: z.enum(['class', 'method', 'field', 'content', 'all']).describe('Type of search'),
-  mapping: z.enum(['yarn', 'mojmap']).describe('Mapping type'),
+  mapping: z.enum(['yarn', 'mojmap', 'mcp']).describe('Mapping type'),
   limit: z.number().optional().describe('Maximum number of results (default: 50)'),
 });
 
 const CompareVersionsSchema = z.object({
   fromVersion: z.string().describe('Source Minecraft version'),
   toVersion: z.string().describe('Target Minecraft version'),
-  mapping: z.enum(['yarn', 'mojmap']).describe('Mapping type to use'),
+  mapping: z.enum(['yarn', 'mojmap', 'mcp']).describe('Mapping type to use'),
   category: z.enum(['classes', 'registry', 'all']).optional().describe('What to compare'),
 });
 
@@ -178,7 +182,7 @@ const ValidateAccessTransformerSchema = z.object({
 const CompareVersionsDetailedSchema = z.object({
   fromVersion: z.string().describe('Source Minecraft version'),
   toVersion: z.string().describe('Target Minecraft version'),
-  mapping: z.enum(['yarn', 'mojmap']).describe('Mapping type to use'),
+  mapping: z.enum(['yarn', 'mojmap', 'mcp']).describe('Mapping type to use'),
   packages: z
     .array(z.string())
     .optional()
@@ -188,13 +192,13 @@ const CompareVersionsDetailedSchema = z.object({
 
 const IndexVersionSchema = z.object({
   version: z.string().describe('Minecraft version to index'),
-  mapping: z.enum(['yarn', 'mojmap']).describe('Mapping type'),
+  mapping: z.enum(['yarn', 'mojmap', 'mcp']).describe('Mapping type'),
 });
 
 const SearchIndexedSchema = z.object({
   query: z.string().describe('Search query (supports FTS5 syntax)'),
   version: z.string().describe('Minecraft version'),
-  mapping: z.enum(['yarn', 'mojmap']).describe('Mapping type'),
+  mapping: z.enum(['yarn', 'mojmap', 'mcp']).describe('Mapping type'),
   types: z
     .array(z.enum(['class', 'method', 'field']))
     .optional()
@@ -295,8 +299,9 @@ export const tools = [
         },
         mapping: {
           type: 'string',
-          enum: ['yarn', 'mojmap'],
-          description: 'Mapping type to use',
+          enum: ['yarn', 'mojmap', 'mcp'],
+          description:
+            'Mapping type to use. `yarn` is Fabric/Quilt only. `mojmap` is Mojang official names (1.14.4+). `mcp` is Forge MCP names for pre-1.14.4 versions (e.g. 1.12.2).',
         },
         startLine: {
           type: 'number',
@@ -331,9 +336,9 @@ export const tools = [
         },
         mapping: {
           type: 'string',
-          enum: ['yarn', 'mojmap'],
+          enum: ['yarn', 'mojmap', 'mcp'],
           description:
-            'Mapping type to use. `yarn` is Fabric/Quilt only. Forge/NeoForge dev environments (1.17+) are mojmap-exclusive — when `jarPath` is provided, this must be `mojmap`.',
+            'Mapping type to use. `yarn` is Fabric/Quilt only. Forge/NeoForge dev environments (1.17+) are mojmap-exclusive — when `jarPath` is provided, this must be `mojmap`. `mcp` is Forge MCP names for pre-1.14.4 versions (e.g. 1.12.2).',
         },
         force: {
           type: 'boolean',
@@ -424,15 +429,15 @@ export const tools = [
         },
         sourceMapping: {
           type: 'string',
-          enum: ['yarn', 'mojmap', 'intermediary', 'official'],
+          enum: ['yarn', 'mojmap', 'intermediary', 'official', 'mcp'],
           description:
-            'Source mapping type: official (obfuscated), intermediary (stable IDs), yarn (community names), mojmap (Mojang names)',
+            'Source mapping type: official (obfuscated), intermediary (stable IDs), yarn (community names), mojmap (Mojang names), mcp (Forge MCP names for pre-1.14.4)',
         },
         targetMapping: {
           type: 'string',
-          enum: ['yarn', 'mojmap', 'intermediary', 'official'],
+          enum: ['yarn', 'mojmap', 'intermediary', 'official', 'mcp'],
           description:
-            'Target mapping type: official (obfuscated), intermediary (stable IDs), yarn (community names), mojmap (Mojang names)',
+            'Target mapping type: official (obfuscated), intermediary (stable IDs), yarn (community names), mojmap (Mojang names), mcp (Forge MCP names for pre-1.14.4)',
         },
       },
       required: ['symbol', 'version', 'sourceMapping', 'targetMapping'],

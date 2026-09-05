@@ -20,10 +20,13 @@ This is a **Model Context Protocol (MCP) server** that provides AI assistants wi
    - `getServerJar()` - Downloads server JAR (for registry extraction)
    - Caches JARs in AppData/config directory
 
-2. **mapping-service.ts** - Downloads and manages mappings (Yarn, Mojmap, Intermediary)
+2. **mapping-service.ts** - Downloads and manages mappings (Yarn, Mojmap, Intermediary, MCP)
    - Yarn: Community mappings (best for mod development)
    - Mojmap: Official Mojang mappings
    - Intermediary: Fabric's stable intermediate mapping format
+   - MCP: Forge ModCoderPack mappings for pre-1.14.4 versions (e.g. 1.12.2),
+     reconstructed at build time from `de.oceanlabs.mcp:mcp:<v>:srg` (joined.srg)
+     + `mcp_stable` CSV (fields/methods.csv) into an obf→MCP SRG
 
 3. **remap-service.ts** - Remaps obfuscated Minecraft JARs using mappings
    - Uses tiny-remapper Java tool

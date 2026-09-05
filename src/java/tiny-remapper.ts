@@ -11,6 +11,12 @@ export interface TinyRemapperOptions {
   threads?: number;
   rebuildSourceFilenames?: boolean;
   ignoreConflicts?: boolean;
+  /**
+   * Match fields ignoring their descriptors. Required for SRG-based MCP
+   * mappings (1.12.2 and earlier), whose `FD:` lines carry no descriptors —
+   * tiny-remapper otherwise throws "null src field desc".
+   */
+  ignoreFieldDesc?: boolean;
   onProgress?: (progress: string) => void;
 }
 
@@ -49,6 +55,7 @@ export class TinyRemapperWrapper {
       threads = 4,
       rebuildSourceFilenames = true,
       ignoreConflicts = false,
+      ignoreFieldDesc = false,
       onProgress,
     } = options;
 
@@ -67,6 +74,10 @@ export class TinyRemapperWrapper {
 
     if (ignoreConflicts) {
       args.push('--ignoreConflicts');
+    }
+
+    if (ignoreFieldDesc) {
+      args.push('--ignorefielddesc');
     }
 
     logger.info(`Remapping JAR: ${inputJar} -> ${outputJar}`);

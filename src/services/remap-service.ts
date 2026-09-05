@@ -102,6 +102,13 @@ export class RemapService {
       return await this.remapMojmap(version, inputJar, outputPath, onProgress);
     }
 
+    // MCP mappings (pre-1.14.4, e.g. 1.12.2) are a single obf -> named SRG
+    // with no intermediary link, and `FD:` lines carry no descriptors — hence
+    // `ignoreFieldDesc` (tiny-remapper requirement, not an option).
+    if (mapping === 'mcp') {
+      return await this.remapMcp(version, inputJar, outputPath, onProgress);
+    }
+
     // Get mappings
     const mappingsFile = await this.mappingService.getMappings(version, mapping);
 
@@ -247,6 +254,35 @@ export class RemapService {
   }
 
   /**
+   * Remap using MCP mappings (single-step: official/obfuscated -> MCP named).
+   *
+   * MCP mappings (pre-1.14.4) are obfuscated -> MCP-name SRG files. Unlike
+   * Yarn/Mojmap there is no intermediary stage: the SRG `FD:` lines carry no
+   * field descriptors, so we pass `ignoreFieldDesc` to tiny-remapper.
+   */
+  private async remapMcp(
+    version: string,
+    inputJar: string,
+    outputPath: string,
+    onProgress?: (progress: string) => void,
+  ): Promise<string> {
+    logger.info(`Remapping ${version} from obfuscated to MCP names`);
+    const mappingsFile = await this.mappingService.getMappings(version, 'mcp');
+
+    await this.tinyRemapper.remap(inputJar, outputPath, mappingsFile, {
+      fromNamespace: 'source', // obfuscated namespace in the MCP SRG
+      toNamespace: 'target', // MCP named namespace in the MCP SRG
+      threads: 4,
+      rebuildSourceFilenames: true,
+      ignoreFieldDesc: true,
+      onProgress,
+    });
+
+    logger.info(`MCP remapping complete: ${outputPath}`);
+    return outputPath;
+  }
+
+  /**
    * Get namespaces for mapping type
    */
   private getNamespaces(mapping: MappingType): { fromNamespace: string; toNamespace: string } {
@@ -258,6 +294,8 @@ export class RemapService {
         return { fromNamespace: 'official', toNamespace: 'named' };
       case 'intermediary':
         return { fromNamespace: 'official', toNamespace: 'intermediary' };
+      case 'mcp':
+        return { fromNamespace: 'source', toNamespace: 'target' };
       default:
         throw new Error(`Unsupported mapping type: ${mapping}`);
     }

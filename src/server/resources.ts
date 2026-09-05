@@ -290,8 +290,8 @@ async function handleSourceResource(
   const decompileService = getDecompileService();
 
   // Validate mapping type
-  if (mapping !== 'yarn' && mapping !== 'mojmap') {
-    throw new Error(`Invalid mapping type: ${mapping}. Must be 'yarn' or 'mojmap'`);
+  if (mapping !== 'yarn' && mapping !== 'mojmap' && mapping !== 'mcp') {
+    throw new Error(`Invalid mapping type: ${mapping}. Must be 'yarn', 'mojmap', or 'mcp'`);
   }
 
   const source = await decompileService.getClassSource(version, className, mapping as MappingType);
@@ -314,9 +314,9 @@ async function handleMappingsResource(uri: string, version: string, mapping: str
   const mappingService = getMappingService();
 
   // Validate mapping type
-  if (mapping !== 'yarn' && mapping !== 'mojmap' && mapping !== 'intermediary') {
+  if (mapping !== 'yarn' && mapping !== 'mojmap' && mapping !== 'intermediary' && mapping !== 'mcp') {
     throw new Error(
-      `Invalid mapping type: ${mapping}. Must be 'yarn', 'mojmap', or 'intermediary'`,
+      `Invalid mapping type: ${mapping}. Must be 'yarn', 'mojmap', 'intermediary', or 'mcp'`,
     );
   }
 
@@ -456,8 +456,8 @@ async function handleIndexResource(uri: string, version: string, mapping: string
   const searchService = getSearchIndexService();
 
   // Validate mapping type
-  if (mapping !== 'yarn' && mapping !== 'mojmap') {
-    throw new Error(`Invalid mapping type: ${mapping}. Must be 'yarn' or 'mojmap'`);
+  if (mapping !== 'yarn' && mapping !== 'mojmap' && mapping !== 'mcp') {
+    throw new Error(`Invalid mapping type: ${mapping}. Must be 'yarn', 'mojmap', or 'mcp'`);
   }
 
   const stats = searchService.getStats(version, mapping as MappingType);
@@ -518,7 +518,7 @@ export async function listResourcesForVersion(version: string): Promise<
   }> = [];
 
   // Add mapping resources
-  for (const mapping of ['yarn', 'mojmap', 'intermediary']) {
+  for (const mapping of ['yarn', 'mojmap', 'intermediary', 'mcp']) {
     result.push({
       uri: `minecraft://mappings/${version}/${mapping}`,
       name: `${mapping} mappings for ${version}`,

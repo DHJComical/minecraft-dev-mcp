@@ -1,8 +1,9 @@
-import { existsSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import AdmZip from 'adm-zip';
 import { getCacheManager } from '../cache/cache-manager.js';
 import { getFabricMaven } from '../downloaders/fabric-maven.js';
+import { downloadMcpMappings } from '../downloaders/mcp-downloader.js';
 import { getMojangDownloader } from '../downloaders/mojang-downloader.js';
 import { getMappingIO } from '../java/mapping-io.js';
 import { parseTinyV2 } from '../parsers/tiny-v2.js';
@@ -10,7 +11,8 @@ import type { MappingType } from '../types/minecraft.js';
 import { MappingNotFoundError } from '../utils/errors.js';
 import { ensureDir } from '../utils/file-utils.js';
 import { logger } from '../utils/logger.js';
-import { getMojmapTinyPath } from '../utils/paths.js';
+import { lookupInMcpSrg } from '../utils/mcp-mappings.js';
+import { getMcpSrgPath, getMojmapTinyPath } from '../utils/paths.js';
 import { getVersionManager } from './version-manager.js';
 
 /**
@@ -74,6 +76,10 @@ export class MappingService {
       const convertedPath = getMojmapTinyPath(version);
       return existsSync(convertedPath) ? convertedPath : null;
     }
+    if (mappingType === 'mcp') {
+      const mcpPath = getMcpSrgPath(version);
+      return existsSync(mcpPath) ? mcpPath : null;
+    }
     return this.cache.getMappingPath(version, mappingType) ?? null;
   }
 
@@ -94,6 +100,12 @@ export class MappingService {
         const path = await this.downloadAndExtractIntermediary(version);
         this.cache.cacheMapping(version, mappingType, path);
         return path;
+      }
+      case 'mcp': {
+        // MCP mappings are built locally from the Forge maven artifacts and
+        // stored at `mappings/mcp-<version>.srg`; no DB row is needed because
+        // `getCachedMapping` resolves the path directly.
+        return await downloadMcpMappings(version);
       }
       default:
         throw new MappingNotFoundError(
@@ -310,7 +322,7 @@ export class MappingService {
   private getSingleFileLookup(
     source: MappingType,
     target: MappingType,
-  ): 'intermediary' | 'yarn' | 'mojmap' | null {
+  ): 'intermediary' | 'yarn' | 'mojmap' | 'mcp' | null {
     // official ↔ intermediary: use intermediary file
     if (
       (source === 'official' && target === 'intermediary') ||
@@ -335,6 +347,14 @@ export class MappingService {
       return 'mojmap';
     }
 
+    // official ↔ mcp: use mcp file (single-step, no intermediary needed)
+    if (
+      (source === 'official' && target === 'mcp') ||
+      (source === 'mcp' && target === 'official')
+    ) {
+      return 'mcp';
+    }
+
     // Cross-file lookup required (official↔yarn, official↔mojmap, yarn↔mojmap)
     return null;
   }
@@ -345,18 +365,25 @@ export class MappingService {
    */
   private getNamespaceForType(
     mappingType: MappingType,
-    _fileType: 'intermediary' | 'yarn' | 'mojmap',
+    _fileType: 'intermediary' | 'yarn' | 'mojmap' | 'mcp',
   ): string {
     // Intermediary file has: official, intermediary
     // Yarn file has: intermediary, named
     // Mojmap file has: intermediary, named
+    // MCP file has: source, target (obfuscated → MCP names)
 
     if (mappingType === 'official') {
-      return 'official';
+      // In the MCP file the obfuscated namespace is named 'source'.
+      return _fileType === 'mcp' ? 'source' : 'official';
     }
 
     if (mappingType === 'intermediary') {
       return 'intermediary';
+    }
+
+    if (mappingType === 'mcp') {
+      // In the MCP file the named namespace is 'target'.
+      return 'target';
     }
 
     // Both yarn and mojmap use 'named' namespace in their respective files
@@ -375,9 +402,19 @@ export class MappingService {
     symbol: string,
     sourceMapping: MappingType,
     targetMapping: MappingType,
-    fileType: 'intermediary' | 'yarn' | 'mojmap',
+    fileType: 'intermediary' | 'yarn' | 'mojmap' | 'mcp',
   ): Promise<MappingLookupResult> {
     const mappingPath = await this.getMappings(version, fileType);
+
+    // MCP files are SRG (source→target), not Tiny v2 — handle separately.
+    if (fileType === 'mcp') {
+      const srg = readFileSync(mappingPath, 'utf8');
+      // The MCP file is obfuscated → MCP; reverse is named → obfuscated.
+      const reverse = sourceMapping === 'mcp';
+      const hit = lookupInMcpSrg(srg, symbol, reverse);
+      return this.createLookupResult(hit.found, hit.source, hit.target, hit.type, hit.className);
+    }
+
     const mappingData = parseTinyV2(mappingPath);
 
     const sourceNamespace = this.getNamespaceForType(sourceMapping, fileType);
@@ -518,7 +555,7 @@ export class MappingService {
   /**
    * Get the file type that contains a mapping type
    */
-  private getFileForMapping(mappingType: MappingType): 'intermediary' | 'yarn' | 'mojmap' {
+  private getFileForMapping(mappingType: MappingType): 'intermediary' | 'yarn' | 'mojmap' | 'mcp' {
     switch (mappingType) {
       case 'official':
         return 'intermediary';
@@ -528,6 +565,9 @@ export class MappingService {
         return 'yarn';
       case 'mojmap':
         return 'mojmap';
+      case 'mcp':
+        // MCP is a standalone obf→named file; both namespaces live in it.
+        return 'mcp';
     }
   }
 

@@ -65,8 +65,10 @@ export interface Library {
  * - 'intermediary': Fabric's stable intermediate names (e.g., 'class_1234', 'method_5678')
  * - 'yarn': Fabric community human-readable names
  * - 'mojmap': Official Mojang human-readable names
+ * - 'mcp': Forge/ModCoderPack human-readable names for pre-1.14.4 versions
+ *   (e.g. 1.12.2), where Mojang does not publish official mappings.
  */
-export type MappingType = 'yarn' | 'mojmap' | 'intermediary' | 'official';
+export type MappingType = 'yarn' | 'mojmap' | 'intermediary' | 'official' | 'mcp';
 
 /**
  * Tiny mapping entry (simplified)

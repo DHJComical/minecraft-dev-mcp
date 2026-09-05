@@ -3,24 +3,25 @@
 Reference for AI/agent operators working in this repo. Grounded in `CLAUDE.md` and current project state.
 
 ## Project Snapshot
-- MCP server that lets agents decompile, remap, search, and analyze Minecraft (1.14+; obfuscated through 1.21.11).
+- MCP server that lets agents decompile, remap, search, and analyze Minecraft (1.12.2+; obfuscated through 1.21.11). Pre-1.14.4 versions (e.g. 1.12.2) use Forge **MCP** mappings.
 - Phase 1 & 2 complete (core + advanced tools); 29 integration tests green as of 2025-12-06.
 - Phase 3 focus: third-party mod analysis; missing piece is decompiling remapped mod JARs (see TODO).
 - Stack: Node 18+/ESM-only (`"type": "module"`), TS 5.7, Java 17+ (21+ for newest MC), better-sqlite3, VineFlower decompiler, tiny-remapper.
 
 ## What Agents Should Prioritize
 - Keep ESM intact: no CommonJS, ensure `.js` extensions on local imports after build.
-- Registry extraction must use the obfuscated **server JAR** with version-aware bundler flag; never the client JAR.
+- Registry extraction must use the obfuscated **server JAR** with version-aware bundler flag; never the client JAR. Unsupported for <1.13 (no data generator).
 - Yarn remapping is two-step: official → intermediary → yarn; do not collapse into one pass.
+- MCP remapping (1.12.2 & earlier) is single-step obf→MCP SRG with `ignoreFieldDesc`; the SRG `FD:` lines carry no descriptors.
 - Respect cache layout in platform app data (`jars/`, `mappings/`, `remapped/`, `decompiled/{version}/{mapping}/`, `registry/{version}/`, `resources/`, `search-index/`, `cache.db`).
 - VineFlower drops `libraries/`, `versions/`, `logs/` in CWD during runs; temporary and gitignored.
 
 ## Architecture Wayfinder (src/)
-- `services/`: `version-manager` (JARs), `mapping-service` (Yarn/Mojmap/Intermediary), `remap-service` (two-step Yarn), `decompile-service` (VineFlower), `registry-service` (data generator on server JAR), `source-service` (pipeline orchestrator).
+- `services/`: `version-manager` (JARs), `mapping-service` (Yarn/Mojmap/Intermediary/MCP), `remap-service` (two-step Yarn/Mojmap; single-step MCP), `decompile-service` (VineFlower), `registry-service` (data generator on server JAR), `source-service` (pipeline orchestrator).
 - `java/`: `tiny-remapper`, `vineflower`, `mc-data-gen` (bundler vs legacy invocation), `java-process` (exec wrapper).
-- `downloaders/`: Mojang assets/mappings, Yarn mappings, Java tool JARs.
+- `downloaders/`: Mojang assets/mappings, Yarn mappings, MCP mappings (Forge maven → SRG+CSV → obf→MCP), Java tool JARs.
 - `cache/`: cache manager + SQLite metadata DB.
-- `utils/paths.ts`: resolves OS-specific cache roots.
+- `utils/paths.ts`: resolves OS-specific cache roots; `utils/mcp-mappings.ts`: SRG↔CSV join + SRG lookup.
 
 ## Available MCP Tools (for LLM surfaces)
 - Phase 1 core: `get_minecraft_source`, `decompile_minecraft_version`, `list_minecraft_versions`, `get_registry_data`.

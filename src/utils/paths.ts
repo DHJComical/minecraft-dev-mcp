@@ -116,6 +116,22 @@ export function getMojmapTinyPath(version: string): string {
 }
 
 /**
+ * Get raw MCP `joined.srg`-style path (obfuscated → SRG, from
+ * `de.oceanlabs.mcp:mcp:<version>:srg`).
+ */
+export function getMcpJoinedSrgPath(version: string): string {
+  return join(paths.mappings(), `mcp-joined-${version}.srg`);
+}
+
+/**
+ * Get the generated obfuscated → MCP SRG path (reconstructed from
+ * `joined.srg` + `fields.csv`/`methods.csv`).
+ */
+export function getMcpSrgPath(version: string): string {
+  return join(paths.mappings(), `mcp-${version}.srg`);
+}
+
+/**
  * Get registry data path
  */
 export function getRegistryPath(version: string): string {
