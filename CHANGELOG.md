@@ -5,6 +5,42 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - 2026-09-05
+
+### Added
+
+- **MCP mappings now cover every version from 1.7.10 through 1.12.2**
+  (previously only 1.12.2). The stable-build table in the MCP downloader was
+  rewritten with values verified against
+  `de/oceanlabs/mcp/mcp_stable/maven-metadata.xml` on maven.minecraftforge.net —
+  the old entries for 1.8–1.11 pointed at artifacts that do not exist (HTTP 404).
+  Patch releases without their own stable CSV artifact (1.9.2, 1.10, 1.11.1)
+  alias the nearest stable build, which is safe because MCP SRG ids
+  (`field_`/`func_NNNNN`) are globally permanent; unmapped ids fall back to
+  their SRG name in the joined output.
+- **Manual test suite for 1.7.10** (`npm run test:manual:1.7.10`) covering
+  download → mapping build → remap → decompile → source retrieval, plus the
+  clear `get_registry_data` failure (<1.13 has no data generator).
+- **Offline unit tests** for the MCP mapping utilities (`__tests__/core/mcp-mappings.test.ts`),
+  replicating the real artifact formats of 1.7.10–1.12.2 (`PK:` lines,
+  descriptor-less `FD:` lines, synthetic `$VALUES`, pre-named enum constants).
+
+### Fixed
+
+- **`find_mapping` field lookups for `mcp` silently returned misses.**
+  The generated obf → MCP SRG places `FD:` lines before any `CL:` line (a
+  mapping-io `detectFormat` workaround), but `lookupInMcpSrg` parsed members
+  by attaching them to the preceding `CL:` entry, so every `FD:` line was
+  skipped. Parsing is now order-independent: `FD:`/`MD:` lines carry the class
+  name explicitly on both sides and are keyed by their own line.
+
+### Changed
+
+- Tool descriptions now advertise `mcp` as "pre-1.14.4 versions
+  (1.7.10-1.12.2)" instead of citing 1.12.2 only.
+- 1.10.1 remains unsupported: it has no `mcp-<v>-srg.zip` on the Forge maven
+  at all; requests fail fast with the list of supported versions.
+
 ## [1.4.1] - 2026-09-05
 
 Corrects the package metadata published with 1.4.0 (repository/homepage/bugs
