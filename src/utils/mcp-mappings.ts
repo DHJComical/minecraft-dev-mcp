@@ -113,9 +113,7 @@ export function buildJoinedMapping(
       );
       if (!m) continue;
       const named = methods.get(m[6]) ?? m[6];
-      mds.push(
-        `MD: ${m[1]}/${m[2]} (${m[3]})${m[4]} ${m[5]}/${named} (${m[7]})${m[8]}`,
-      );
+      mds.push(`MD: ${m[1]}/${m[2]} (${m[3]})${m[4]} ${m[5]}/${named} (${m[7]})${m[8]}`);
       continue;
     }
   }
@@ -146,48 +144,69 @@ export interface McpLookupHit {
  *
  * The SRG is inherently directional (obfuscated → named); reverse lookups
  * (named → obfuscated) are supported by scanning both columns.
+ *
+ * Parsing is order-independent: our generated file places `FD:` lines before
+ * any `CL:` line (see `buildJoinedMapping`), and `FD:`/`MD:` lines carry the
+ * class name explicitly on both sides, so members are keyed by their own
+ * line rather than by the preceding `CL:` entry.
  */
-export function lookupInMcpSrg(
-  srgContent: string,
-  symbol: string,
-  reverse: boolean,
-): McpLookupHit {
+export function lookupInMcpSrg(srgContent: string, symbol: string, reverse: boolean): McpLookupHit {
   const normalized = symbol.replace(/\./g, '/');
   const shortName = normalized.includes('/')
     ? normalized.slice(normalized.lastIndexOf('/') + 1)
     : normalized;
 
-  // Parse the SRG into a per-class structure.
-  const classMap = new Map<
-    string,
-    { obf: string; named: string; fields: Array<[string, string]>; methods: Array<[string, string]> }
-  >();
-  let current: { obf: string; named: string; fields: Array<[string, string]>; methods: Array<[string, string]> } | null = null;
+  interface SrgClass {
+    obf: string;
+    named: string;
+  }
+  interface SrgMember {
+    obfMember: string;
+    namedMember: string;
+    obfClass: string;
+    namedClass: string;
+  }
+
+  const classMap = new Map<string, SrgClass>();
+  const fields: SrgMember[] = [];
+  const methods: SrgMember[] = [];
 
   for (const rawLine of srgContent.split(/\r?\n/)) {
     const line = rawLine.trimEnd();
     if (line.startsWith('CL:')) {
       const m = line.match(/^CL: (\S+) (\S+)$/);
       if (m) {
-        current = { obf: m[1], named: m[2], fields: [], methods: [] };
-        classMap.set(m[1], current);
+        classMap.set(m[1], { obf: m[1], named: m[2] });
       }
       continue;
     }
-    if (!current) continue;
     if (line.startsWith('FD:')) {
+      // FD: <obfClass>/<obfField> <namedClass>/<namedField>
       const m = line.match(/^FD: (\S+) (\S+)\/(\S+)$/);
       if (m) {
-        current.fields.push([m[1].slice(m[1].lastIndexOf('/') + 1), m[3]]);
+        const obfClassPath = m[1];
+        const slash = obfClassPath.lastIndexOf('/');
+        fields.push({
+          obfMember: slash >= 0 ? obfClassPath.slice(slash + 1) : obfClassPath,
+          namedMember: m[3],
+          obfClass: slash >= 0 ? obfClassPath.slice(0, slash) : '',
+          namedClass: m[2],
+        });
       }
       continue;
     }
     if (line.startsWith('MD:')) {
+      // MD: <obfClass>/<obfMethod> (<desc>)<desc> <namedClass>/<namedMethod> (<desc>)<desc>
       const m = line.match(
         /^MD: (\S+)\/(\S+)\s+\(([^)]*)\)(\S+)\s+(\S+)\/(\S+)\s+\(([^)]*)\)(\S+)/,
       );
       if (m) {
-        current.methods.push([m[2], m[6]]);
+        methods.push({
+          obfMember: m[2],
+          namedMember: m[6],
+          obfClass: m[1],
+          namedClass: m[5],
+        });
       }
     }
   }
@@ -206,32 +225,27 @@ export function lookupInMcpSrg(
     }
   }
 
-  // Member match: within each class, compare member names (obf side or MCP side).
-  for (const cls of classMap.values()) {
-    for (const [obfMember, namedMember] of cls.methods) {
-      const hit = !reverse ? obfMember === shortName || obfMember === symbol : namedMember === shortName || namedMember === symbol;
-      if (hit) {
-        return {
-          found: true,
-          type: 'method',
-          source: obfMember,
-          target: namedMember,
-          className: reverse ? cls.obf : cls.named,
-        };
-      }
-    }
-    for (const [obfMember, namedMember] of cls.fields) {
-      const hit = !reverse ? obfMember === shortName || obfMember === symbol : namedMember === shortName || namedMember === symbol;
-      if (hit) {
-        return {
-          found: true,
-          type: 'field',
-          source: obfMember,
-          target: namedMember,
-          className: reverse ? cls.obf : cls.named,
-        };
-      }
-    }
+  // Member match: compare member names (obf side or MCP side).
+  const hitMember = (member: SrgMember, type: 'field' | 'method'): McpLookupHit | null => {
+    const obfHit = !reverse && (member.obfMember === shortName || member.obfMember === symbol);
+    const namedHit = reverse && (member.namedMember === shortName || member.namedMember === symbol);
+    if (!obfHit && !namedHit) return null;
+    return {
+      found: true,
+      type,
+      source: member.obfMember,
+      target: member.namedMember,
+      className: reverse ? member.obfClass : member.namedClass,
+    };
+  };
+
+  for (const member of methods) {
+    const hit = hitMember(member, 'method');
+    if (hit) return hit;
+  }
+  for (const member of fields) {
+    const hit = hitMember(member, 'field');
+    if (hit) return hit;
   }
 
   return { found: false, source: symbol };
@@ -242,10 +256,7 @@ export function lookupInMcpSrg(
  * Used to avoid pulling adm-zip into the download path; returns null when the
  * entry is not present.
  */
-export function zipGetEntry(
-  zipBuffer: Uint8Array,
-  entryName: string,
-): Uint8Array | null {
+export function zipGetEntry(zipBuffer: Uint8Array, entryName: string): Uint8Array | null {
   const buf = Buffer.from(zipBuffer);
   let off = 0;
   while (off + 30 <= buf.length) {

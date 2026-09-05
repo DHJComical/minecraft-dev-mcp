@@ -29,6 +29,12 @@ manual/
   v1.19.4/            # Yarn pipeline tests
     test-constants.ts
     full-suite.test.ts
+  v1.12.2/            # MCP (ModCoderPack) pipeline tests
+    test-constants.ts
+    full-suite.test.ts
+  v1.7.10/            # MCP pipeline tests (oldest supported version)
+    test-constants.ts
+    full-suite.test.ts
   mojmap/             # Mojmap remap/decompile tests
     test-constants.ts
     mojmap-remapping.test.ts
@@ -56,6 +62,8 @@ Run specific service-level suites:
 npm run test:manual:1.21.10
 npm run test:manual:1.20.1
 npm run test:manual:1.19.4
+npm run test:manual:1.12.2
+npm run test:manual:1.7.10
 npm run test:manual:mojmap
 ```
 
@@ -96,4 +104,7 @@ Default matrix includes:
 ## Version Support Notes
 
 - `1.21.11` and below: obfuscated client, Yarn and Mojmap remap paths apply
+- `1.12.2` and `1.7.10`: obfuscated client, MCP (ModCoderPack) remap path
+  applies (single-step obf->SRG with `ignoreFieldDesc`); registry extraction
+  is unsupported (<1.13) and must fail with a clear error
 - `26.1+` snapshots: unobfuscated client, use `mojmap` path, Yarn should fail with actionable guidance

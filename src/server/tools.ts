@@ -43,7 +43,7 @@ const GetMinecraftSourceSchema = z.object({
   mapping: z
     .enum(['yarn', 'mojmap', 'mcp'])
     .describe(
-      'Mapping type to use. `yarn` is Fabric/Quilt only. `mojmap` is Mojang official names (1.14.4+). `mcp` is Forge MCP names for pre-1.14.4 versions (e.g. 1.12.2).',
+      'Mapping type to use. `yarn` is Fabric/Quilt only. `mojmap` is Mojang official names (1.14.4+). `mcp` is Forge MCP names for pre-1.14.4 versions (1.7.10-1.12.2).',
     ),
   startLine: z
     .number()
@@ -77,7 +77,7 @@ const DecompileMinecraftVersionSchema = z
     mapping: z
       .enum(['yarn', 'mojmap', 'mcp'])
       .describe(
-        'Mapping type to use. `yarn` is Fabric/Quilt only. Forge/NeoForge dev environments (1.17+) are mojmap-exclusive — when `jarPath` is provided, this must be `mojmap`. `mcp` is Forge MCP names for pre-1.14.4 versions (e.g. 1.12.2).',
+        'Mapping type to use. `yarn` is Fabric/Quilt only. Forge/NeoForge dev environments (1.17+) are mojmap-exclusive — when `jarPath` is provided, this must be `mojmap`. `mcp` is Forge MCP names for pre-1.14.4 versions (1.7.10-1.12.2).',
       ),
     force: z
       .boolean()
@@ -301,7 +301,7 @@ export const tools = [
           type: 'string',
           enum: ['yarn', 'mojmap', 'mcp'],
           description:
-            'Mapping type to use. `yarn` is Fabric/Quilt only. `mojmap` is Mojang official names (1.14.4+). `mcp` is Forge MCP names for pre-1.14.4 versions (e.g. 1.12.2).',
+            'Mapping type to use. `yarn` is Fabric/Quilt only. `mojmap` is Mojang official names (1.14.4+). `mcp` is Forge MCP names for pre-1.14.4 versions (1.7.10-1.12.2).',
         },
         startLine: {
           type: 'number',
@@ -338,7 +338,7 @@ export const tools = [
           type: 'string',
           enum: ['yarn', 'mojmap', 'mcp'],
           description:
-            'Mapping type to use. `yarn` is Fabric/Quilt only. Forge/NeoForge dev environments (1.17+) are mojmap-exclusive — when `jarPath` is provided, this must be `mojmap`. `mcp` is Forge MCP names for pre-1.14.4 versions (e.g. 1.12.2).',
+            'Mapping type to use. `yarn` is Fabric/Quilt only. Forge/NeoForge dev environments (1.17+) are mojmap-exclusive — when `jarPath` is provided, this must be `mojmap`. `mcp` is Forge MCP names for pre-1.14.4 versions (1.7.10-1.12.2).',
         },
         force: {
           type: 'boolean',
