@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-09-05
+
+First release under the `@dhjcomical` scope (the same codebase as
+`@mcdxai/minecraft-dev-mcp@1.3.0`, plus Minecraft 1.12.2 support).
+
+### Added
+
+- **Minecraft 1.12.2 support via MCP mappings.** 1.12.2 predates Mojang's
+  official mappings (`client_mappings` only exist from 1.14.4) and Fabric's
+  yarn/intermediary (1.14+), so it uses the Forge ModCoderPack (MCP) mappings,
+  reconstructed at build time from two public Forge maven artifacts:
+  `de.oceanlabs.mcp:mcp:1.12.2:srg` (`joined.srg`, obfuscated → SRG) and
+  `de.oceanlabs.mcp:mcp_stable:39-1.12` (`fields.csv`/`methods.csv`,
+  SRG → MCP names). The combined obf → MCP SRG is consumed by tiny-remapper
+  with `ignoreFieldDesc` (SRG `FD:` lines carry no descriptors).
+- **New `mcp` mapping type** for `MappingType`, usable with
+  `decompile_minecraft_version`, `get_minecraft_source`, `search_minecraft_code`,
+  `index_minecraft_version`, `search_indexed`, `compare_versions`,
+  `compare_versions_detailed`, `find_mapping`, and the HTTP resources.
+- **`find_mapping` supports MCP** in both directions (obfuscated ↔ MCP names).
+- **Manual test suite** for 1.12.2 (`npm run test:manual:1.12.2`).
+
+### Changed
+
+- **Registry extraction is explicitly unsupported for <1.13.** Versions like
+  1.12.2 have no bundled data generator (`net.minecraft.data.Main` /
+  `--reports` were introduced in 1.13); `get_registry_data` now throws a clear,
+  actionable error instead of failing obscurely inside the Java process.
+
 ## [Unreleased]
 
 ### Fixed

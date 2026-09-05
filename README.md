@@ -25,8 +25,8 @@
 
 | Method | Command |
 | --- | --- |
-| **NPM (Recommended)** | `npm install -g @mcdxai/minecraft-dev-mcp` |
-| **NPX (No Install)** | Use `npx -y @mcdxai/minecraft-dev-mcp` directly in config |
+| **NPM (Recommended)** | `npm install -g @dhjcomical/minecraft-dev-mcp` |
+| **NPX (No Install)** | Use `npx -y @dhjcomical/minecraft-dev-mcp` directly in config |
 | **From Source** | See the [Development](#development) section |
 
 ### Claude Desktop
@@ -60,7 +60,7 @@ Add to your Claude Desktop configuration file:
   "mcpServers": {
     "minecraft-dev": {
       "command": "npx",
-      "args": ["-y", "@mcdxai/minecraft-dev-mcp"]
+      "args": ["-y", "@dhjcomical/minecraft-dev-mcp"]
     }
   }
 }
@@ -139,8 +139,8 @@ Output is always JSON: `{ "success": true, "tool": "...", "result": ... }` on su
 
 | Feature | Description |
 | --- | --- |
-| **On-demand decompilation** | Download, remap, and decompile any Minecraft version (1.14+) on first use — cached for instant access afterward |
-| **Multiple mapping namespaces** | Yarn, Mojmap (official), Intermediary, and obfuscated — translate any symbol between them with `find_mapping` |
+| **On-demand decompilation** | Download, remap, and decompile any Minecraft version (1.12.2+) on first use — cached for instant access afterward |
+| **Multiple mapping namespaces** | Yarn, Mojmap (official), Intermediary, MCP (pre-1.14.4), and obfuscated — translate any symbol between them with `find_mapping` |
 | **Decompiled source access** | Retrieve Java source for any Minecraft class with optional line-range filtering |
 | **Mod JAR analysis** | Analyze Fabric, Quilt, Forge, and NeoForge mods — metadata, mixins, dependencies, entry points — and decompile them |
 | **Mixin, Access Widener & Access Transformer validation** | Validate Mixin annotations, Fabric `.accesswidener` files, and Forge/NeoForge access transformer `.cfg` files with error reporting and fix suggestions. Access widener/transformer checks run against the game's real bytecode, catching inherited members, record constructors, inner-class reachability, and conflicts across multiple AT files |
@@ -174,14 +174,17 @@ Output is always JSON: `{ "success": true, "tool": "...", "result": ... }` on su
 
 ## Version Support
 
-| Version Range | Yarn | Mojmap | Notes |
-| --- | --- | --- | --- |
-| **1.14 – 1.21.11** | Full support | Full support | Obfuscated — two-step remapping required (official → intermediary → named) |
-| **26.1+** | Not available | Full support | Deobfuscated by Mojang — no remapping needed, classes already human-readable |
+| Version Range | Yarn | Mojmap | MCP | Notes |
+| --- | --- | --- | --- | --- |
+| **1.8 – 1.12.2** | Not available | Not available | Full support | Obfuscated — Forge MCP mappings reconstructed from `mcp:srg` + `mcp_stable` CSV; single-step remap with `ignoreFieldDesc` |
+| **1.14 – 1.21.11** | Full support | Full support | Not supported | Obfuscated — two-step remapping required (official → intermediary → named) |
+| **26.1+** | Not available | Full support | Not supported | Deobfuscated by Mojang — no remapping needed, classes already human-readable |
+
+Registry extraction (`get_registry_data`) requires the Minecraft data generator (1.13+) and is **not supported** for 1.12.2 and earlier.
 
 Yarn mappings are discontinued after 1.21.11, which is the last obfuscated Minecraft version. All 26.1+ releases ship with readable class and method names and only require Mojmap.
 
-**Tested versions:** 1.19.4 · 1.20.1 · 1.21.10 · 1.21.11 · 26.1-snapshot-8 · 26.1-snapshot-9
+**Tested versions:** 1.12.2 (MCP) · 1.19.4 · 1.20.1 · 1.21.10 · 1.21.11 · 26.1-snapshot-8 · 26.1-snapshot-9
 
 </div>
 
@@ -237,7 +240,7 @@ Delete the directory to clear the cache — the server re-downloads anything mis
 | Path | Contents |
 | --- | --- |
 | `jars/` | Client and server JARs |
-| `mappings/` | Yarn, Mojmap, and Intermediary mapping files |
+| `mappings/` | Yarn, Mojmap, Intermediary, and MCP mapping files |
 | `remapped/` | Remapped JARs |
 | `decompiled/<version>/<mapping>/` | Decompiled Minecraft source |
 | `decompiled-mods/<modId>/<modVersion>/<mapping>/` | Decompiled third-party mod source |
@@ -267,7 +270,7 @@ Delete the directory to clear the cache — the server re-downloads anything mis
 **Build from source:**
 
 ```bash
-git clone https://github.com/MCDxAI/minecraft-dev-mcp.git
+git clone https://github.com/DHJComical/minecraft-dev-mcp.git
 cd minecraft-dev-mcp
 npm install
 npm run build
