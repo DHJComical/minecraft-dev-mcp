@@ -4,6 +4,7 @@ import {
   buildJoinedMapping,
   lookupInMcpSrg,
   parseMcpCsv,
+  tsrgToSrg,
   zipGetEntry,
 } from '../../src/utils/mcp-mappings.js';
 
@@ -152,6 +153,57 @@ describe('lookupInMcpSrg', () => {
     // Intermediate SRG names only survive in the generated file as
     // CSV-miss fallbacks, so they are not a lookup surface.
     expect(lookupInMcpSrg(srg, 'field_99999_zz', false).found).toBe(false);
+  });
+});
+
+describe('tsrgToSrg', () => {
+  // Mirrors `config/joined.tsrg` from mcp_config-1.13.2 (TextFormatting block).
+  const TSRG = [
+    'a net/minecraft/util/text/TextFormatting',
+    '\ta BLACK',
+    '\tA field_96303_A',
+    '\tC field_175747_C',
+    '\ta (C)La; func_211165_a',
+    '\ta (I)La; func_110646_a',
+    'sv net/minecraft/entity/Entity',
+    '\tf field_70170_p',
+    '\td (Lsv;)Z func_70033_w static',
+  ].join('\n');
+
+  it('converts class, field and method lines to SRG', () => {
+    const result = tsrgToSrg(TSRG);
+    expect(result.classes).toBe(2);
+    expect(result.fields).toBe(4);
+    expect(result.methods).toBe(3);
+    expect(result.srg).toContain('CL: a net/minecraft/util/text/TextFormatting');
+  });
+
+  it('scopes fields and methods under their enclosing class', () => {
+    const result = tsrgToSrg(TSRG);
+    expect(result.srg).toContain('FD: a/A net/minecraft/util/text/TextFormatting/field_96303_A');
+    expect(result.srg).toContain(
+      'MD: sv/d (Lsv;)Z net/minecraft/entity/Entity/func_70033_w (Lsv;)Z',
+    );
+    // Already human-named target sides (enum constants) pass through.
+    expect(result.srg).toContain('FD: a/a net/minecraft/util/text/TextFormatting/BLACK');
+  });
+
+  it('keeps the FD-first line ordering used by buildJoinedMapping', () => {
+    const result = tsrgToSrg(TSRG);
+    expect(result.srg.indexOf('FD:')).toBeLessThan(result.srg.indexOf('CL:'));
+  });
+
+  it('rejects tsrg v2 with a clear error', () => {
+    expect(() => tsrgToSrg('tsrg2 pos lvt\nc\ta\tb')).toThrow(/tsrg2/);
+  });
+
+  it('round-trips through buildJoinedMapping with the stable CSVs', () => {
+    const srg = tsrgToSrg(TSRG).srg;
+    const result = buildJoinedMapping(srg, FIELDS_CSV, METHODS_CSV);
+    // field_96303_A -> BLACK via CSV; func_110646_a -> getTextWithoutFormattingCodes.
+    expect(result.srg).toContain(
+      'MD: a/a (I)La; net/minecraft/util/text/TextFormatting/getTextWithoutFormattingCodes (I)La;',
+    );
   });
 });
 

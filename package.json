@@ -35,6 +35,7 @@
     "test:manual:1.19.4": "vitest --config vitest.manual.config.ts __tests__/manual/v1.19.4",
     "test:manual:1.12.2": "vitest --config vitest.manual.config.ts __tests__/manual/v1.12.2",
     "test:manual:1.7.10": "vitest --config vitest.manual.config.ts __tests__/manual/v1.7.10",
+    "test:manual:1.13.2": "vitest --config vitest.manual.config.ts __tests__/manual/v1.13.2",
     "test:manual:mojmap": "vitest --config vitest.mojmap.config.ts",
     "test:manual:mojmap:1.21.11": "cross-env MOJMAP_TEST_VERSION=1.21.11 vitest --config vitest.mojmap.config.ts",
     "test:manual:mojmap:1.21.10": "cross-env MOJMAP_TEST_VERSION=1.21.10 vitest --config vitest.mojmap.config.ts",

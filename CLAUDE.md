@@ -24,13 +24,16 @@ This is a **Model Context Protocol (MCP) server** that provides AI assistants wi
    - Yarn: Community mappings (best for mod development)
    - Mojmap: Official Mojang mappings
    - Intermediary: Fabric's stable intermediate mapping format
-   - MCP: Forge ModCoderPack mappings for pre-1.14.4 versions (1.7.10–1.12.2;
-     1.7.10 is the oldest with artifacts on the Forge maven), reconstructed at
-     build time from `de.oceanlabs.mcp:mcp:<v>:srg` (joined.srg)
-     + `mcp_stable` CSV (fields/methods.csv) into an obf→MCP SRG. The verified
-     stable-build table is `MCP_STABLE_BUILD` in `src/downloaders/mcp-downloader.ts`;
-     patch versions without their own stable CSV (1.9.2, 1.10, 1.10.1, 1.11.1)
-     alias the nearest one because MCP SRG ids are globally permanent
+   - MCP: Forge ModCoderPack mappings for pre-1.14.4 versions (1.7.10–1.13.2;
+     1.7.10 is the oldest with artifacts on the Forge maven, and 1.13.x has no
+     yarn/intermediary at all), reconstructed at build time from
+     `de.oceanlabs.mcp:mcp:<v>:srg` (joined.srg) for 1.7.10–1.12.2 or
+     `de.oceanlabs.mcp:mcp_config:<v>` (config/joined.tsrg via `tsrgToSrg`)
+     for 1.13.x + `mcp_stable` CSV (fields/methods.csv) into an obf→MCP SRG.
+     The verified stable-build tables are `MCP_STABLE_BUILD`/`MCP_CONFIG_VERSIONS`
+     in `src/downloaders/mcp-downloader.ts`; versions without their own stable
+     CSV (1.9.2, 1.10, 1.11.1, 1.13.1) alias the nearest one because MCP SRG
+     ids are globally permanent
 
 3. **remap-service.ts** - Remaps obfuscated Minecraft JARs using mappings
    - Uses tiny-remapper Java tool

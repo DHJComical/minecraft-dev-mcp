@@ -22,8 +22,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   download → mapping build → remap → decompile → source retrieval, plus the
   clear `get_registry_data` failure (<1.13 has no data generator).
 - **Offline unit tests** for the MCP mapping utilities (`__tests__/core/mcp-mappings.test.ts`),
-  replicating the real artifact formats of 1.7.10–1.12.2 (`PK:` lines,
-  descriptor-less `FD:` lines, synthetic `$VALUES`, pre-named enum constants).
+  replicating the real artifact formats of 1.7.10–1.13.2 (`PK:` lines,
+  descriptor-less `FD:` lines, synthetic `$VALUES`, pre-named enum constants,
+  tsrg v1 layout, tsrg v2 rejection).
+- **Manual test suites for 1.7.10 and 1.13.2**
+  (`npm run test:manual:1.7.10`, `npm run test:manual:1.13.2`) covering
+  download → mapping build → remap → decompile → source retrieval.
 
 ### Fixed
 

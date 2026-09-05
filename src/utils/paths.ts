@@ -124,6 +124,14 @@ export function getMcpJoinedSrgPath(version: string): string {
 }
 
 /**
+ * Get the cached mcp_config zip path (MC 1.13.x, from
+ * `de.oceanlabs.mcp:mcp_config:<version>`, contains `config/joined.tsrg`).
+ */
+export function getMcpConfigZipPath(version: string): string {
+  return join(paths.mappings(), `mcp_config-${version}.zip`);
+}
+
+/**
  * Get the generated obfuscated → MCP SRG path (reconstructed from
  * `joined.srg` + `fields.csv`/`methods.csv`).
  */

@@ -3,7 +3,7 @@
 Reference for AI/agent operators working in this repo. Grounded in `CLAUDE.md` and current project state.
 
 ## Project Snapshot
-- MCP server that lets agents decompile, remap, search, and analyze Minecraft (1.7.10+; obfuscated through 1.21.11, unobfuscated after the 26.1 cutover). Pre-1.14.4 versions (1.7.10–1.12.2) use Forge **MCP** mappings.
+- MCP server that lets agents decompile, remap, search, and analyze Minecraft (1.7.10+; obfuscated through 1.21.11, unobfuscated after the 26.1 cutover). Pre-1.14.4 versions (1.7.10–1.13.2) use Forge **MCP** mappings; 1.14–1.14.3 work via yarn.
 - Phase 1 & 2 complete (core + advanced tools); 29 integration tests green as of 2025-12-06.
 - Phase 3 complete (third-party mod analysis, 2025-12-15): mod decompilation/search/indexing tools exist (`decompile_mod_jar`, `search_mod_code`, `index_mod`, `search_mod_indexed`).
 - Stack: Node 18+/ESM-only (`"type": "module"`), TS 5.7, Java 17+ (21+ for newest MC), better-sqlite3, VineFlower decompiler, tiny-remapper.
@@ -12,7 +12,7 @@ Reference for AI/agent operators working in this repo. Grounded in `CLAUDE.md` a
 - Keep ESM intact: no CommonJS, ensure `.js` extensions on local imports after build.
 - Registry extraction must use the obfuscated **server JAR** with version-aware bundler flag; never the client JAR. Unsupported for <1.13 (no data generator).
 - Yarn remapping is two-step: official → intermediary → yarn; do not collapse into one pass.
-- MCP remapping (1.7.10–1.12.2) is single-step obf→MCP SRG with `ignoreFieldDesc`; the SRG `FD:` lines carry no descriptors. Verified MCP stable builds live in `MCP_STABLE_BUILD` (`src/downloaders/mcp-downloader.ts`); patch versions without their own stable CSV alias the nearest one because MCP SRG ids are globally permanent.
+- MCP remapping (1.7.10–1.13.2) is single-step obf→MCP SRG with `ignoreFieldDesc`; the SRG `FD:` lines carry no descriptors. 1.7.10–1.12.2 build from `mcp:<v>:srg` joined.srg; 1.13.x from `mcp_config:<v>` joined.tsrg (tsrg v1: method lines are `<obf> <desc> <srg>`) converted by `tsrgToSrg`. Verified stable builds live in `MCP_STABLE_BUILD`/`MCP_CONFIG_VERSIONS` (`src/downloaders/mcp-downloader.ts`); versions without their own stable CSV alias the nearest one because MCP SRG ids are globally permanent.
 - Respect cache layout in platform app data (`jars/`, `mappings/`, `remapped/`, `decompiled/{version}/{mapping}/`, `registry/{version}/`, `resources/`, `search-index/`, `cache.db`).
 - VineFlower drops `libraries/`, `versions/`, `logs/` in CWD during runs; temporary and gitignored.
 

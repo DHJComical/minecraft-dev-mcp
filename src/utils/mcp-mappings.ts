@@ -114,11 +114,82 @@ export function buildJoinedMapping(
       if (!m) continue;
       const named = methods.get(m[6]) ?? m[6];
       mds.push(`MD: ${m[1]}/${m[2]} (${m[3]})${m[4]} ${m[5]}/${named} (${m[7]})${m[8]}`);
-      continue;
     }
   }
 
   // FD lines first (see the workaround note above), then CL, then MD.
+  const ordered = [...fds, ...cls, ...mds];
+  return {
+    classes: cls.length,
+    fields: fds.length,
+    methods: mds.length,
+    srg: ordered.join('\n'),
+  };
+}
+
+export interface TsrgToSrgResult {
+  /** Number of class mappings parsed. */
+  classes: number;
+  /** Number of field mappings parsed. */
+  fields: number;
+  /** Number of method mappings parsed. */
+  methods: number;
+  /** The equivalent SRG (CL:/FD:/MD:) content, FD lines first. */
+  srg: string;
+}
+
+/**
+ * Convert an mcp_config `joined.tsrg` (tsrg v1, MC 1.13.x) into SRG lines so
+ * it can feed `buildJoinedMapping` like the pre-1.13 `joined.srg` files.
+ *
+ * tsrg v1 layout (seen in `de.oceanlabs.mcp:mcp_config` zips):
+ * - Unindented line: `<obfClass> <srgClass>` (no `CL:` prefix).
+ * - Tab-indented field line: `<obf> <srg>` — fields carry no descriptor.
+ * - Tab-indented method line: `<obf> <desc> <srg>` (descriptor second).
+ * - Some producers append a trailing ` static` token to members; extra
+ *   tokens are ignored.
+ * - Recoverable names (enum constants) appear already human-named on the
+ *   target side, matching the pre-1.13 joined.srg behavior.
+ *
+ * The method descriptors reference obfuscated classes on both sides; that is
+ * fine for tiny-remapper (it rebuilds target descriptors from the class map)
+ * and for our own lookups (descriptors are ignored).
+ */
+export function tsrgToSrg(tsrg: string): TsrgToSrgResult {
+  const cls: string[] = [];
+  const fds: string[] = [];
+  const mds: string[] = [];
+  let currentObf = '';
+  let currentNamed = '';
+
+  for (const rawLine of tsrg.split(/\r?\n/)) {
+    if (!rawLine.trim()) continue;
+    if (rawLine.trimStart().startsWith('tsrg2 ')) {
+      throw new Error('tsrg2 mappings are not supported (expected tsrg v1 from mcp_config)');
+    }
+    if (!rawLine.startsWith('\t')) {
+      const m = rawLine.trim().match(/^(\S+) (\S+)$/);
+      if (!m) continue;
+      currentObf = m[1];
+      currentNamed = m[2];
+      cls.push(`CL: ${currentObf} ${currentNamed}`);
+      continue;
+    }
+    if (!currentObf) continue;
+    const tokens = rawLine.trim().split(/\s+/);
+    if (tokens.length >= 3 && tokens[1].startsWith('(')) {
+      // Method: <obf> <desc> <srg> [static]
+      mds.push(
+        `MD: ${currentObf}/${tokens[0]} ${tokens[1]} ${currentNamed}/${tokens[2]} ${tokens[1]}`,
+      );
+    } else if (tokens.length >= 2) {
+      // Field: <obf> <srg>
+      fds.push(`FD: ${currentObf}/${tokens[0]} ${currentNamed}/${tokens[1]}`);
+    }
+  }
+
+  // Same FD-first ordering as buildJoinedMapping (mapping-io detectFormat
+  // workaround); keep the two emitters consistent.
   const ordered = [...fds, ...cls, ...mds];
   return {
     classes: cls.length,
