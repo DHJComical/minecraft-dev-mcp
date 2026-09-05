@@ -50,12 +50,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/MCDxAI/minecraft-dev-mcp.git"
+    "url": "https://github.com/DHJComical/minecraft-dev-mcp.git"
   },
   "bugs": {
-    "url": "https://github.com/MCDxAI/minecraft-dev-mcp/issues"
+    "url": "https://github.com/DHJComical/minecraft-dev-mcp/issues"
   },
-  "homepage": "https://github.com/MCDxAI/minecraft-dev-mcp#readme",
+  "homepage": "https://github.com/DHJComical/minecraft-dev-mcp#readme",
   "dependencies": {
     "@keqingmoe/tree-sitter": "^0.26.2",
     "@modelcontextprotocol/sdk": "^1.24.0",
