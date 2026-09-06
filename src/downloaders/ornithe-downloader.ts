@@ -73,9 +73,7 @@ export async function resolveCalamusArtifactId(version: string): Promise<string>
   throw new MappingNotFoundError(
     version,
     'feather',
-    `No calamus-intermediary mappings on maven.ornithemc.net for Minecraft ${version} ` +
-      `(probed '${splitId}' and '${version}'). Ornithe covers alpha 1.0.10+ through 1.6.4; ` +
-      'pre-alpha (rd-*/classic) versions are not published, and 1.7.10+ should use mcp/yarn/mojmap.',
+    `No calamus-intermediary mappings on maven.ornithemc.net for Minecraft ${version} (probed '${splitId}' and '${version}'). Ornithe covers alpha 1.0.10+ through 1.6.4; pre-alpha (rd-*/classic) versions are not published, and 1.7.10+ should use mcp/yarn/mojmap.`,
   );
 }
 
@@ -184,8 +182,7 @@ async function resolveLatestFeatherBuild(artifactId: string, version: string): P
     throw new MappingNotFoundError(
       version,
       'feather',
-      `No feather build published for Minecraft ${version} (artifact '${artifactId}'). ` +
-        'Calamus covers it, but human-readable feather names do not exist for this version yet.',
+      `No feather build published for Minecraft ${version} (artifact '${artifactId}'). Calamus covers it, but human-readable feather names do not exist for this version yet.`,
     );
   }
   return latest;

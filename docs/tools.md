@@ -1,6 +1,6 @@
 # Tools Reference
 
-21 tools organized by category.
+21 tools organized by category. Mapping channels cover every Minecraft version from alpha 1.0.10 (Ornithe feather/calamus) through 1.13.2 (Forge MCP) to 26.1+ (unobfuscated) — see the README's [Version Support](../README.md#version-support) table.
 
 ## Source Code (6 tools)
 
@@ -9,8 +9,8 @@ Decompile, browse, and search Minecraft source code.
 | Tool | Description | Parameters |
 | --- | --- | --- |
 | **list_minecraft_versions** | List all versions available from Mojang and which are already cached locally. | None |
-| **decompile_minecraft_version** | Decompile an entire Minecraft version. Downloads the client JAR, remaps it, and decompiles all classes with VineFlower. Subsequent calls use cached results. | `version`, `mapping` • Optional: `force` (re-decompile) |
-| **get_minecraft_source** | Get decompiled Java source for a specific Minecraft class. Downloads, remaps, and decompiles automatically on first use; subsequent requests are instant from cache. | `version`, `className`, `mapping` (`yarn`\|`mojmap`) • Optional: `startLine`, `endLine`, `maxLines` |
+| **decompile_minecraft_version** | Decompile an entire Minecraft version. Downloads the client JAR, remaps it, and decompiles all classes with VineFlower. Subsequent calls use cached results. Also accepts a `jarPath` for Forge/NeoForge patched JARs (version key `<mc>-<loader>-<loaderVersion>`). | `version`, `mapping` • Optional: `force` (re-decompile), `jarPath` |
+| **get_minecraft_source** | Get decompiled Java source for a specific Minecraft class. Downloads, remaps, and decompiles automatically on first use; subsequent requests are instant from cache. | `version`, `className`, `mapping` (`yarn`\|`mojmap`\|`mcp`\|`feather`) • Optional: `startLine`, `endLine`, `maxLines` |
 | **search_minecraft_code** | Regex search across decompiled Minecraft source by class name, method name, field name, or file content. | `version`, `query`, `searchType` (`class`\|`method`\|`field`\|`content`\|`all`), `mapping` • Optional: `limit` |
 | **index_minecraft_version** | Build a SQLite FTS5 full-text search index for decompiled Minecraft source. Required before using `search_indexed`. | `version`, `mapping` |
 | **search_indexed** | Fast full-text search on a pre-built index using FTS5 syntax. Significantly faster than `search_minecraft_code` for broad queries. Supports AND, OR, NOT, phrase matching, and prefix wildcards. | `query`, `version`, `mapping` • Optional: `types` (`class`\|`method`\|`field`), `limit` |
@@ -21,8 +21,8 @@ Translate names between namespaces and explore game data.
 
 | Tool | Description | Parameters |
 | --- | --- | --- |
-| **find_mapping** | Translate a class, method, or field name between any two mapping namespaces (official, intermediary, yarn, mojmap). | `symbol`, `version`, `sourceMapping`, `targetMapping` |
-| **remap_mod_jar** | Remap a Fabric mod JAR from intermediary to human-readable Yarn or Mojmap names. Accepts WSL and Windows paths. Minecraft version is auto-detected from mod metadata if not provided. | `inputJar`, `outputJar`, `toMapping` • Optional: `mcVersion` |
+| **find_mapping** | Translate a class, method, or field name between any two mapping namespaces (official, intermediary, yarn, mojmap, mcp, calamus, feather). | `symbol`, `version`, `sourceMapping`, `targetMapping` |
+| **remap_mod_jar** | Remap a mod JAR to human-readable names, loader-aware: Fabric/Quilt mods (intermediary → yarn/mojmap/feather) and Forge/NeoForge mods for 1.7.10–1.13.2 (SRG member names → MCP). Accepts WSL and Windows paths. Loader and Minecraft version are auto-detected from mod metadata if not provided. | `inputJar`, `outputJar`, `toMapping` • Optional: `mcVersion`, `loader` (`auto`\|`fabric`\|`quilt`\|`forge`\|`neoforge`) |
 | **get_registry_data** | Extract registry data (blocks, items, entities, etc.) for a version by running Minecraft's built-in data generator. | `version` • Optional: `registry` (e.g., `block`, `item`, `entity`) |
 
 ## Analysis & Validation (7 tools)

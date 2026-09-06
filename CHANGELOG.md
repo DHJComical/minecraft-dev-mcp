@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.5.1] - 2026-09-05
+## [1.6.0] - 2026-09-06
 
 ### Added
 
@@ -22,31 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **New mapping types**: `feather` (Ornithe human-readable names for
   pre-1.7.10) and `calamus` (Ornithe intermediary), usable everywhere a
   mapping type is accepted, including `find_mapping` (official ↔ feather
-  lookups bridge through calamus).
-- **Manual test suite for b1.7.3** (`npm run test:manual:b1.7.3`) covering
-  download → calamus/feather build → two-step remap → decompile → source
-  retrieval, plus the registry fail-fast for non-1.x version ids.
-
-- **MCP mappings now cover every version from 1.7.10 through 1.12.2**
-  (previously only 1.12.2). The stable-build table in the MCP downloader was
-  rewritten with values verified against
-  `de/oceanlabs/mcp/mcp_stable/maven-metadata.xml` on maven.minecraftforge.net —
-  the old entries for 1.8–1.11 pointed at artifacts that do not exist (HTTP 404).
-  Patch releases without their own stable CSV artifact (1.9.2, 1.10, 1.11.1)
-  alias the nearest stable build, which is safe because MCP SRG ids
-  (`field_`/`func_NNNNN`) are globally permanent; unmapped ids fall back to
-  their SRG name in the joined output.
-- **Manual test suite for 1.7.10** (`npm run test:manual:1.7.10`) covering
-  download → mapping build → remap → decompile → source retrieval, plus the
-  clear `get_registry_data` failure (<1.13 has no data generator).
-- **Offline unit tests** for the MCP mapping utilities (`__tests__/core/mcp-mappings.test.ts`),
-  replicating the real artifact formats of 1.7.10–1.13.2 (`PK:` lines,
-  descriptor-less `FD:` lines, synthetic `$VALUES`, pre-named enum constants,
-  tsrg v1 layout, tsrg v2 rejection).
-- **Manual test suites for 1.7.10 and 1.13.2**
-  (`npm run test:manual:1.7.10`, `npm run test:manual:1.13.2`) covering
-  download → mapping build → remap → decompile → source retrieval.
-
+  lookups bridge through calamus) and the `mcp://mappings/...` resources.
 - **Loader-aware `remap_mod_jar`.** Forge/NeoForge mods for 1.7.10–1.13.2
   (distributed with SRG member names and unchanged class names) can now be
   remapped to MCP names: a member-only SRG→MCP mapping is built from the same
@@ -57,6 +33,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mods targeting pre-1.7.10 versions can remap to `feather`. (Forge mods for
   1.14+ are not supported — no published SRG→member mappings exist for those
   eras.)
+- **Manual test suite for b1.7.3** (`npm run test:manual:b1.7.3`) covering
+  download → calamus/feather build → two-step remap → decompile → source
+  retrieval, plus the registry fail-fast for non-1.x version ids.
+
+## [1.5.1] - 2026-09-05
+
+### Added
+
+- **MCP mappings now cover every version from 1.7.10 through 1.13.2**
+  (previously only 1.12.2). The stable-build table in the MCP downloader was
+  rewritten with values verified against
+  `de/oceanlabs/mcp/mcp_stable/maven-metadata.xml` on maven.minecraftforge.net —
+  the old entries for 1.8–1.11 pointed at artifacts that do not exist (HTTP 404).
+  Patch releases without their own stable CSV artifact (1.9.2, 1.10, 1.11.1)
+  alias the nearest stable build, which is safe because MCP SRG ids
+  (`field_`/`func_NNNNN`) are globally permanent; unmapped ids fall back to
+  their SRG name in the joined output.
+- **Minecraft 1.13.x support via MCPConfig** (`de.oceanlabs.mcp:mcp_config`).
+  1.13–1.13.2 have no Mojang official mappings (1.14.4+), no Fabric
+  yarn/intermediary (1.14+), and the plain `mcp:<v>:srg` zips stop at 1.12.x.
+  Mappings are reconstructed from `config/joined.tsrg` (tsrg v1) joined with
+  the `mcp_stable` CSVs — the same route Unimined/ForgeGradle 3 take. A new
+  `tsrgToSrg` converter feeds the existing join/remap pipeline unchanged.
+- **Minecraft 1.14.0–1.14.3 verified end-to-end through the existing yarn
+  path** (no code changes needed; documented and covered by smoke runs).
+- **Manual test suites for 1.7.10 and 1.13.2**
+  (`npm run test:manual:1.7.10`, `npm run test:manual:1.13.2`) covering
+  download → mapping build → remap → decompile → source retrieval, plus the
+  clear `get_registry_data` failure for <1.13.
+- **Offline unit tests** for the MCP mapping utilities (`__tests__/core/mcp-mappings.test.ts`),
+  replicating the real artifact formats of 1.7.10–1.13.2 (`PK:` lines,
+  descriptor-less `FD:` lines, synthetic `$VALUES`, pre-named enum constants,
+  tsrg v1 layout, tsrg v2 rejection).
 
 ### Fixed
 
@@ -70,7 +79,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Tool descriptions now advertise `mcp` as "pre-1.14.4 versions
-  (1.7.10-1.12.2)" instead of citing 1.12.2 only.
+  (1.7.10-1.13.2)" instead of citing 1.12.2 only.
 - 1.10.1 remains unsupported: it has no `mcp-<v>-srg.zip` on the Forge maven
   at all; requests fail fast with the list of supported versions.
 

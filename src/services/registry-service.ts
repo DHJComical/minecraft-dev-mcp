@@ -64,9 +64,7 @@ export class RegistryService {
     if (isPreDataGenVersion(version)) {
       throw new RegistryExtractionError(
         version,
-        `Registry extraction is not supported for Minecraft ${version}: the data generator ` +
-          `(net.minecraft.data.Main / --reports) was introduced in 1.13, and ${version} ships ` +
-          `a fully obfuscated JAR without one. Only 1.13+ versions are supported.`,
+        `Registry extraction is not supported for Minecraft ${version}: the data generator (net.minecraft.data.Main / --reports) was introduced in 1.13, and ${version} ships a fully obfuscated JAR without one. Only 1.13+ versions are supported.`,
       );
     }
   }

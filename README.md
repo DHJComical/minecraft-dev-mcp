@@ -139,10 +139,10 @@ Output is always JSON: `{ "success": true, "tool": "...", "result": ... }` on su
 
 | Feature | Description |
 | --- | --- |
-| **On-demand decompilation** | Download, remap, and decompile any Minecraft version (1.12.2+) on first use — cached for instant access afterward |
-| **Multiple mapping namespaces** | Yarn, Mojmap (official), Intermediary, MCP (pre-1.14.4), and obfuscated — translate any symbol between them with `find_mapping` |
+| **On-demand decompilation** | Download, remap, and decompile any Minecraft version (alpha 1.0.10+) on first use — cached for instant access afterward |
+| **Multiple mapping namespaces** | Yarn, Mojmap (official), Intermediary, Feather/Calamus (Ornithe, pre-1.7.10), MCP (pre-1.14.4), and obfuscated — translate any symbol between them with `find_mapping` |
 | **Decompiled source access** | Retrieve Java source for any Minecraft class with optional line-range filtering |
-| **Mod JAR analysis** | Analyze Fabric, Quilt, Forge, and NeoForge mods — metadata, mixins, dependencies, entry points — and decompile them |
+| **Mod JAR analysis & loader-aware remapping** | Analyze Fabric, Quilt, Forge, and NeoForge mods — metadata, mixins, dependencies, entry points — then remap with the right loader path (Fabric intermediary → yarn/mojmap/feather; Forge/NeoForge 1.7.10–1.13.2 SRG members → MCP names) and decompile them |
 | **Mixin, Access Widener & Access Transformer validation** | Validate Mixin annotations, Fabric `.accesswidener` files, and Forge/NeoForge access transformer `.cfg` files with error reporting and fix suggestions. Access widener/transformer checks run against the game's real bytecode, catching inherited members, record constructors, inner-class reachability, and conflicts across multiple AT files |
 | **Version diff** | Class-level and AST-level diff between any two Minecraft versions — method signatures, field changes, breaking changes |
 | **Full-text search** | SQLite FTS5 indexes for fast BM25-ranked search across Minecraft and mod source |
@@ -174,17 +174,20 @@ Output is always JSON: `{ "success": true, "tool": "...", "result": ... }` on su
 
 ## Version Support
 
-| Version Range | Yarn | Mojmap | MCP | Notes |
+| Version Range | Yarn / Feather | Mojmap | MCP | Notes |
 | --- | --- | --- | --- | --- |
-| **1.8 – 1.12.2** | Not available | Not available | Full support | Obfuscated — Forge MCP mappings reconstructed from `mcp:srg` + `mcp_stable` CSV; single-step remap with `ignoreFieldDesc` |
-| **1.14 – 1.21.11** | Full support | Full support | Not supported | Obfuscated — two-step remapping required (official → intermediary → named) |
+| **a1.0.10 – 1.6.4** | Full support (Feather) | Not available | Not available | Obfuscated — Ornithe **calamus → feather** two-step remap; pre-1.3 versions use split `-client`/`-server` artifacts (the client JAR is the target) |
+| **1.7.10 – 1.13.2** | Not available | Not available | Full support | Obfuscated — Forge MCP mappings reconstructed from `mcp:srg` joined.srg (1.7.10–1.12.2) or `mcp_config` joined.tsrg (1.13.x) + `mcp_stable` CSV; single-step remap with `ignoreFieldDesc` |
+| **1.14 – 1.21.11** | Full support (Yarn) | Full support | Not supported | Obfuscated — two-step remapping required (official → intermediary → named) |
 | **26.1+** | Not available | Full support | Not supported | Deobfuscated by Mojang — no remapping needed, classes already human-readable |
 
-Registry extraction (`get_registry_data`) requires the Minecraft data generator (1.13+) and is **not supported** for 1.12.2 and earlier.
+Not supported: **1.10.1** (no `mcp:<v>:srg` zip published) and pre-alpha versions (rd-\*/classic — Ornithe starts at alpha 1.0.10). Requests for unsupported versions fail fast with a clear error.
+
+Registry extraction (`get_registry_data`) requires the Minecraft data generator (1.13+) and is **not supported** for 1.12.2 and earlier — alpha/beta ids fail fast with a clear error.
 
 Yarn mappings are discontinued after 1.21.11, which is the last obfuscated Minecraft version. All 26.1+ releases ship with readable class and method names and only require Mojmap.
 
-**Tested versions:** 1.12.2 (MCP) · 1.19.4 · 1.20.1 · 1.21.10 · 1.21.11 · 26.1-snapshot-8 · 26.1-snapshot-9
+**Tested versions:** b1.7.3 (Feather) · 1.4.7 (Feather) · 1.7.10 (MCP) · 1.8.9 (MCP) · 1.12.2 (MCP) · 1.13.2 (MCP) · 1.14.3 (Yarn) · 1.19.4 · 1.20.1 · 1.21.10 · 1.21.11 · 26.1-snapshot-8 · 26.1-snapshot-9
 
 </div>
 
@@ -240,7 +243,7 @@ Delete the directory to clear the cache — the server re-downloads anything mis
 | Path | Contents |
 | --- | --- |
 | `jars/` | Client and server JARs |
-| `mappings/` | Yarn, Mojmap, Intermediary, and MCP mapping files |
+| `mappings/` | Yarn, Mojmap, Intermediary, Feather/Calamus, and MCP mapping files |
 | `remapped/` | Remapped JARs |
 | `decompiled/<version>/<mapping>/` | Decompiled Minecraft source |
 | `decompiled-mods/<modId>/<modVersion>/<mapping>/` | Decompiled third-party mod source |
@@ -286,7 +289,7 @@ npm run build
 | --- | --- |
 | **Java not found** — `Java 17+ is required but not found` | Install Java 17+ from [Adoptium](https://adoptium.net/) • Verify with `java -version` • Ensure `java` is on your PATH |
 | **Decompilation fails** | Check available disk space (~500 MB per version) • Review `%APPDATA%\minecraft-dev-mcp\minecraft-dev-mcp.log` • Force re-decompile by passing `"force": true` |
-| **Yarn not available** — `Yarn mappings not available for version X` | Yarn is only supported for 1.14–1.21.11 • Use `mojmap` for 26.1+ versions |
+| **Yarn not available** — `Yarn mappings not available for version X` | Yarn is only supported for 1.14–1.21.11 • Pre-1.7.10 versions use `feather` • Use `mojmap` for 26.1+ versions |
 | **Class not found** | Use the fully qualified class name (e.g., `net.minecraft.world.entity.Entity`) • Verify the version is decompiled |
 | **Registry returns no data** | Registry names use singular form: `block`, `item`, `entity` — not `blocks`, `items`, `entities` |
 | **WSL path error** | Both `/mnt/c/path/to/file` and `C:\path\to\file` are accepted for all JAR path parameters |
@@ -304,6 +307,7 @@ npm run build
 | **VineFlower** | Modern Java decompiler by the [Vineflower Team](https://github.com/Vineflower/vineflower) |
 | **tiny-remapper** | JAR remapping tool by [FabricMC](https://github.com/FabricMC) |
 | **Yarn Mappings** | Community-maintained mappings by [FabricMC](https://fabricmc.net/) |
+| **Ornithe** | Feather & Calamus mappings for pre-1.7.10 Minecraft by the [Ornithe Team](https://ornithemc.net/) |
 | **MCP SDK** | Protocol implementation by [Anthropic](https://github.com/modelcontextprotocol/typescript-sdk) |
 
 </div>

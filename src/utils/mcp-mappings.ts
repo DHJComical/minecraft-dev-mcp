@@ -266,7 +266,6 @@ export function buildSrgToMcpMapping(
       if (!mcp) continue;
       const desc = rewrite(`(${m[7]})${m[8]}`);
       mds.push(`MD: ${m[5]}/${m[6]} ${desc} ${m[5]}/${mcp} ${desc}`);
-      continue;
     }
   }
 
