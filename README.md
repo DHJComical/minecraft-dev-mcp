@@ -131,6 +131,30 @@ minecraft-dev-cli analyze_mod_jar --jarPath C:\mods\example.jar --includeAllClas
 
 Output is always JSON: `{ "success": true, "tool": "...", "result": ... }` on success, or `{ "success": false, "tool": "...", "error": "..." }` with exit code `1` on failure. Run `minecraft-dev-cli help` for full usage.
 
+### Agent Skill (no MCP client required)
+
+Some agents (Cursor, Codex, Copilot, generic CLI agents) don't connect over MCP. For those, install the bundled **agent skill** so the agent knows when and how to call `minecraft-dev-cli`:
+
+```bash
+# Global install exposes both the CLI and the skill files
+npm install -g @dhjcomical/minecraft-dev-mcp
+
+# Find where the skill was installed
+npm root -g
+# → <global-root>/@dhjcomical/minecraft-dev-mcp/skills/minecraft-dev
+```
+
+Copy the `minecraft-dev` skill folder to your agent's skill directory:
+
+| Agent | Skill directory |
+| --- | --- |
+| **Claude Code** | `~/.claude/skills/minecraft-dev` (personal) or `<project>/.claude/skills/minecraft-dev` (shared) |
+| **Cursor** | `<project>/.cursor/skills/minecraft-dev` |
+| **Codex CLI** | `~/.codex/skills/minecraft-dev` |
+| **OpenCode** | `~/.config/opencode/skills/minecraft-dev` |
+
+The skill's frontmatter tells the agent when to invoke it (any question about `net.minecraft.*`, mappings, registries, mixins, mod JARs, ...), and `references/tools.md` gives it exact flags per tool. Ensure `minecraft-dev-cli` is on the agent's `PATH`.
+
 ---
 
 <div align="center">

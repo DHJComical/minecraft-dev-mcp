@@ -1,6 +1,6 @@
 ---
 name: minecraft-dev
-description: Use this skill whenever the user wants to look up Minecraft source, mod source, mod loader source, mappings, registries, versions, version differences, access transformers, mixin information, documentation, or code search results with minecraft-dev-cli. Also use it for Fabric, Forge, Quilt, and NeoForge source lookups.
+description: Use this skill whenever the user asks about Minecraft internals — net.minecraft.* classes, methods, or fields; what a class does or how it is implemented; obfuscated names like class_1234, method_5678, func_12345_a, or field_12345_a; mappings between intermediary/yarn/mojmap/MCP/feather; block/item/entity registries; differences between Minecraft versions; Fabric, Forge, Quilt, or NeoForge source lookups; a mod JAR's metadata, dependencies, entrypoints, or mixins; or validating Mixin, access widener, or access transformer code. Invoke via minecraft-dev-cli.
 ---
 
 # Minecraft Dev CLI Lookup

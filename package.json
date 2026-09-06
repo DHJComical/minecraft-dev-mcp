@@ -13,6 +13,7 @@
     "README.md",
     "CHANGELOG.md",
     "LICENSE",
+    "skills/",
     "tools/mapping-io-cli/build/libs/*.jar",
     "tools/bytecode-dumper/build/libs/*.jar"
   ],
