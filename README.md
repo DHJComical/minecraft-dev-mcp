@@ -84,6 +84,102 @@ Add to `.claude/settings.local.json` in your project, or to your global Claude C
 }
 ```
 
+<div align="center">
+
+### Cursor
+
+Add to `.cursor/mcp.json` in your project, or to the global `~/.cursor/mcp.json`:
+
+</div>
+
+```json
+{
+  "mcpServers": {
+    "minecraft-dev": {
+      "command": "npx",
+      "args": ["-y", "@dhjcomical/minecraft-dev-mcp"]
+    }
+  }
+}
+```
+
+<div align="center">
+
+### VS Code (Copilot / MCP extension)
+
+Add to `.vscode/mcp.json` in your workspace:
+
+</div>
+
+```json
+{
+  "servers": {
+    "minecraft-dev": {
+      "command": "npx",
+      "args": ["-y", "@dhjcomical/minecraft-dev-mcp"]
+    }
+  }
+}
+```
+
+<div align="center">
+
+### Codex CLI
+
+Add to `~/.codex/config.toml`:
+
+</div>
+
+```toml
+[mcp_servers.minecraft-dev]
+command = "npx"
+args = ["-y", "@dhjcomical/minecraft-dev-mcp"]
+```
+
+<div align="center">
+
+### Windsurf
+
+Add to `~/.codeium/windsurf/mcp_config.json`:
+
+</div>
+
+```json
+{
+  "mcpServers": {
+    "minecraft-dev": {
+      "command": "npx",
+      "args": ["-y", "@dhjcomical/minecraft-dev-mcp"]
+    }
+  }
+}
+```
+
+<div align="center">
+
+### Gemini CLI
+
+Add to `~/.gemini/settings.json`:
+
+</div>
+
+```json
+{
+  "mcpServers": {
+    "minecraft-dev": {
+      "command": "npx",
+      "args": ["-y", "@dhjcomical/minecraft-dev-mcp"]
+    }
+  }
+}
+```
+
+<div align="center">
+
+> **Note:** the examples above use `npx` so no install step is needed. If you installed globally (`npm install -g @dhjcomical/minecraft-dev-mcp`), replace `command`/`args` with `"command": "minecraft-dev-mcp"` (no `args`). On Windows, make sure the global npm bin directory is on your `PATH`.
+
+</div>
+
 ---
 
 <div align="center">
