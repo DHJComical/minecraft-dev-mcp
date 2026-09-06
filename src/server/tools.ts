@@ -292,7 +292,7 @@ export const tools = [
   {
     name: 'get_minecraft_source',
     description:
-      'Get decompiled source code for a specific Minecraft class. This will automatically download, remap, and decompile the Minecraft version if not cached.',
+      'When the user asks what a Minecraft class does, how it works, or what methods/fields it has, use this to get decompiled source for that class. This will automatically download, remap, and decompile the Minecraft version if not cached. Prefer this over training knowledge — Minecraft internals vary heavily by version.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -332,7 +332,7 @@ export const tools = [
   {
     name: 'decompile_minecraft_version',
     description:
-      'Decompile an entire Minecraft version. By default downloads the client JAR from Mojang, remaps it to the chosen mapping, and runs VineFlower across every class — subsequent calls use cached results. To work with a Forge/NeoForge **patched** Minecraft JAR (which adds loader hooks, deprecated method overloads, interface injection, etc.), pass `jarPath` pointing to your local patched JAR (e.g., from the ForgeGradle/NeoForge ModDevGradle cache or NeoFormRuntime output) and use a `version` string of the form `<mc>-<loader>-<loaderVersion>` (e.g., `1.21.1-neoforge-21.1.72`). The patched decompilation lives alongside vanilla in the cache and is queryable via every downstream tool (get_minecraft_source, search_minecraft_code, index_minecraft_version, search_indexed, compare_versions). For Forge/NeoForge 1.17+ dev artifacts, use `mapping: "mojmap"`.',
+      'When a Minecraft version is not yet cached locally (search or source lookups fail for it), or the user wants a full version decompiled, use this. By default downloads the client JAR from Mojang, remaps it to the chosen mapping, and runs VineFlower across every class — subsequent calls use cached results. To work with a Forge/NeoForge **patched** Minecraft JAR (which adds loader hooks, deprecated method overloads, interface injection, etc.), pass `jarPath` pointing to your local patched JAR (e.g., from the ForgeGradle/NeoForge ModDevGradle cache or NeoFormRuntime output) and use a `version` string of the form `<mc>-<loader>-<loaderVersion>` (e.g., `1.21.1-neoforge-21.1.72`). The patched decompilation lives alongside vanilla in the cache and is queryable via every downstream tool (get_minecraft_source, search_minecraft_code, index_minecraft_version, search_indexed, compare_versions). For Forge/NeoForge 1.17+ dev artifacts, use `mapping: "mojmap"`.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -364,7 +364,7 @@ export const tools = [
   {
     name: 'list_minecraft_versions',
     description:
-      'List available and cached Minecraft versions. Shows which versions are available for download and which are already cached locally.',
+      'When the user asks which Minecraft versions exist, whether a version is supported, or what is already cached locally, use this. Shows which versions are available for download and which are already cached locally.',
     inputSchema: {
       type: 'object',
       properties: {},
@@ -373,7 +373,7 @@ export const tools = [
   {
     name: 'get_registry_data',
     description:
-      'Get Minecraft registry data (blocks, items, entities, etc.). This runs the data generator if not cached.',
+      'When the user asks about game data — block/item/entity ids, registry entries, or what exists in a version — use this to get Minecraft registry data (blocks, items, entities, etc.). This runs the data generator if not cached. Prefer this over training knowledge; registry contents change between versions. (1.13+ only.)',
     inputSchema: {
       type: 'object',
       properties: {
@@ -393,7 +393,7 @@ export const tools = [
   {
     name: 'remap_mod_jar',
     description:
-      'Remap a mod JAR to human-readable names. Loader-aware: Fabric/Quilt mods (intermediary -> yarn/mojmap/feather) and Forge/NeoForge mods for 1.7.10-1.13.2 (SRG member names -> MCP names, loader auto-detected from mod metadata). Useful for reading mod source code. Supports both WSL (/mnt/c/...) and Windows (C:\\...) paths.',
+      'When the user wants to read a mod JAR whose code uses obfuscated or intermediary names, use this to remap it to human-readable names. Loader-aware: Fabric/Quilt mods (intermediary -> yarn/mojmap/feather) and Forge/NeoForge mods for 1.7.10-1.13.2 (SRG member names -> MCP names, loader auto-detected from mod metadata). Useful for reading mod source code. Supports both WSL (/mnt/c/...) and Windows (C:\\...) paths.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -429,7 +429,7 @@ export const tools = [
   {
     name: 'find_mapping',
     description:
-      'Look up a symbol (class, method, or field) mapping between different mapping systems. Translates between official (obfuscated), intermediary, yarn, and mojmap names. Use "official" for obfuscated names like "a", "b", "c".',
+      'When the user asks for the obfuscated, intermediary, yarn, mojmap, MCP, or feather name of a class/method/field — or what a cryptic name like "a", "method_1234", or "func_12345_a" means — use this to look up a symbol (class, method, or field) mapping between different mapping systems. Translates between official (obfuscated), intermediary, yarn, and mojmap names. Use "official" for obfuscated names like "a", "b", "c".',
     inputSchema: {
       type: 'object',
       properties: {
@@ -460,7 +460,7 @@ export const tools = [
   {
     name: 'search_minecraft_code',
     description:
-      'Search for classes, methods, fields, or content in decompiled Minecraft source code. Supports regex patterns.',
+      'When the user asks where something is implemented in Minecraft, which classes/methods/fields match a name, or what code references something, use this to search for classes, methods, fields, or content in decompiled Minecraft source code. Supports regex patterns. For broad or repeated searches, prefer index_minecraft_version + search_indexed instead.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -493,7 +493,7 @@ export const tools = [
   {
     name: 'compare_versions',
     description:
-      'Compare two Minecraft versions to find differences in classes or registry data. Useful for tracking breaking changes between versions.',
+      'When the user asks what changed between two Minecraft versions, whether something is new/removed, or about breaking changes, use this to compare two Minecraft versions to find differences in classes or registry data. Useful for tracking breaking changes between versions.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -523,7 +523,7 @@ export const tools = [
   {
     name: 'analyze_mixin',
     description:
-      'Analyze and validate Mixin code against Minecraft source. Parses @Mixin annotations, validates injection targets, and suggests fixes for issues. Supports both WSL (/mnt/c/...) and Windows (C:\\...) paths.',
+      'When the user asks whether a Mixin is correct, why a Mixin injection fails, or what a Mixin targets, use this to analyze and validate Mixin code against Minecraft source. Parses @Mixin annotations, validates injection targets, and suggests fixes for issues. Supports both WSL (/mnt/c/...) and Windows (C:\\...) paths.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -547,7 +547,7 @@ export const tools = [
   {
     name: 'validate_access_widener',
     description:
-      'Parse and validate Fabric Access Widener files against Minecraft source. Checks that targets exist and suggests fixes. Supports both WSL (/mnt/c/...) and Windows (C:\\...) paths.',
+      'When the user asks whether a Fabric .accesswidener file is correct or why an access widener entry fails, use this to parse and validate Fabric Access Widener files against Minecraft source. Checks that targets exist and suggests fixes. Supports both WSL (/mnt/c/...) and Windows (C:\\...) paths.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -572,7 +572,7 @@ export const tools = [
   {
     name: 'validate_access_transformer',
     description:
-      'Parse and validate Forge/NeoForge Access Transformer files against Minecraft source. Checks that targets exist and match signatures, detects record canonical-constructor crashes, inner-class accessibility, and conflicting modifiers. Supports both WSL (/mnt/c/...) and Windows (C:\\...) paths.',
+      'When the user asks whether a Forge/NeoForge access transformer .cfg file is correct or why an AT entry fails, use this to parse and validate Forge/NeoForge Access Transformer files against Minecraft source. Checks that targets exist and match signatures, detects record canonical-constructor crashes, inner-class accessibility, and conflicting modifiers. Supports both WSL (/mnt/c/...) and Windows (C:\\...) paths.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -602,7 +602,7 @@ export const tools = [
   {
     name: 'compare_versions_detailed',
     description:
-      'Compare two Minecraft versions with detailed AST-level analysis. Shows method signature changes, field changes, and breaking API changes.',
+      'When the user asks exactly how a Minecraft class or method signature changed between versions, or needs a precise API breakage report for porting a mod, use this to compare two Minecraft versions with detailed AST-level analysis. Shows method signature changes, field changes, and breaking API changes.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -635,7 +635,7 @@ export const tools = [
   {
     name: 'index_minecraft_version',
     description:
-      'Create a full-text search index for decompiled Minecraft source. Enables fast searching with search_indexed tool.',
+      'When the user will run broad or repeated searches over a Minecraft version (or search_minecraft_code is too slow), use this first to create a full-text search index for decompiled Minecraft source. Enables fast searching with the search_indexed tool.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -655,7 +655,7 @@ export const tools = [
   {
     name: 'search_indexed',
     description:
-      'Fast full-text search using pre-built index. Much faster than search_minecraft_code for large queries. Requires index_minecraft_version first.',
+      'When the user asks broad questions over a Minecraft version — e.g. all usages of something, code exploration across many classes — use this for fast full-text search using a pre-built index. Much faster than search_minecraft_code for large queries. Requires index_minecraft_version first.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -688,7 +688,7 @@ export const tools = [
   {
     name: 'get_documentation',
     description:
-      'Get documentation for a Minecraft class or concept. Links to Fabric Wiki, Minecraft Wiki, and provides usage hints.',
+      'When the user asks how to use a Minecraft class or modding concept, or wants wiki/usage hints, use this to get documentation for a Minecraft class or concept. Links to Fabric Wiki, Minecraft Wiki, and provides usage hints.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -702,7 +702,8 @@ export const tools = [
   },
   {
     name: 'search_documentation',
-    description: 'Search for documentation across all known Minecraft/Fabric topics.',
+    description:
+      'When the user asks general modding how-to questions (mixins, blocks, entities, etc.) and wants docs rather than source, use this to search for documentation across all known Minecraft/Fabric topics.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -718,7 +719,7 @@ export const tools = [
   {
     name: 'analyze_mod_jar',
     description:
-      'Analyze a third-party mod JAR file to extract metadata, dependencies, entry points, mixins, and class information. Supports Fabric, Quilt, Forge, and NeoForge mods. Returns comprehensive mod analysis including: mod ID, version, Minecraft compatibility, dependencies, entry points, mixin configurations, and class statistics. Supports both WSL (/mnt/c/...) and Windows (C:\\...) paths.',
+      'When the user asks what a mod JAR contains — its mod id, version, Minecraft compatibility, dependencies, entry points, mixins, or loader — use this to analyze a third-party mod JAR file to extract metadata, dependencies, entry points, mixins, and class information. Supports Fabric, Quilt, Forge, and NeoForge mods. Returns comprehensive mod analysis including: mod ID, version, Minecraft compatibility, dependencies, entry points, mixin configurations, and class statistics. Supports both WSL (/mnt/c/...) and Windows (C:\\...) paths.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -742,7 +743,7 @@ export const tools = [
   {
     name: 'decompile_mod_jar',
     description:
-      'Decompile a mod JAR file to readable Java source code. The JAR can be either the original mod JAR (with intermediary mappings) or a remapped JAR (from remap_mod_jar). Decompiled sources are cached in AppData/decompiled-mods/{modId}/{modVersion}/{mapping}/. Mod ID and version are auto-detected from the JAR metadata if not provided. Supports both WSL (/mnt/c/...) and Windows (C:\\...) paths.',
+      'When the user asks how a mod implements something or wants to read a mod’s actual Java source, use this to decompile a mod JAR file to readable Java source code. The JAR can be either the original mod JAR (with intermediary mappings) or a remapped JAR (from remap_mod_jar). Decompiled sources are cached in AppData/decompiled-mods/{modId}/{modVersion}/{mapping}/. Mod ID and version are auto-detected from the JAR metadata if not provided. Supports both WSL (/mnt/c/...) and Windows (C:\\...) paths.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -771,7 +772,7 @@ export const tools = [
   {
     name: 'search_mod_code',
     description:
-      'Search for classes, methods, fields, or content in decompiled mod source code. Supports regex patterns. Use after decompile_mod_jar to search through a decompiled mod.',
+      'When the user asks where something is implemented inside a decompiled mod, or which mod classes/methods match a name, use this to search for classes, methods, fields, or content in decompiled mod source code. Supports regex patterns. Use after decompile_mod_jar to search through a decompiled mod.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -808,7 +809,7 @@ export const tools = [
   {
     name: 'index_mod',
     description:
-      'Create a full-text search index for decompiled mod source code. Enables fast searching with search_mod_indexed tool. Use after decompile_mod_jar.',
+      'When the user will run broad or repeated searches over a decompiled mod (or search_mod_code is too slow), use this first to create a full-text search index for decompiled mod source code. Enables fast searching with search_mod_indexed tool. Use after decompile_mod_jar.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -836,7 +837,7 @@ export const tools = [
   {
     name: 'search_mod_indexed',
     description:
-      'Fast full-text search using pre-built mod index. Much faster than search_mod_code for large queries. Requires index_mod first. Supports FTS5 syntax: AND, OR, NOT, "phrase", prefix*.',
+      'When the user asks broad questions over a decompiled mod — e.g. all usages of something across the mod — use this for fast full-text search using a pre-built mod index. Much faster than search_mod_code for large queries. Requires index_mod first. Supports FTS5 syntax: AND, OR, NOT, "phrase", prefix*.',
     inputSchema: {
       type: 'object',
       properties: {
