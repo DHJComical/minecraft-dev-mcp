@@ -43,6 +43,14 @@ This is a **Model Context Protocol (MCP) server** that provides AI assistants wi
 
 3. **remap-service.ts** - Remaps obfuscated Minecraft JARs using mappings
    - Uses tiny-remapper Java tool
+   - `remap_mod_jar` is loader-aware: Fabric/Quilt mods remap
+     intermediary→named; Forge/NeoForge mods for 1.7.10–1.13.2 ship SRG
+     member names, so a member-only SRG→MCP mapping (`buildSrgToMcpMapping`,
+     cached at `mcp-srg-<v>.srg`) renames members while class names stay
+     identical, with the SRG-named vanilla JAR (`mcp-srg-vanilla-<v>.jar`,
+     built from the ordered obf→SRG mapping) passed to tiny-remapper as
+     classpath for inheritance resolution. 1.14+ Forge mods are not
+     supported (no published SRG→member mappings for those eras)
    - Converts obfuscated names → human-readable names
    - **Yarn requires 2-step remapping**: obfuscated → intermediary → yarn
 

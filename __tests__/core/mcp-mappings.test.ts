@@ -2,6 +2,7 @@ import AdmZip from 'adm-zip';
 import { describe, expect, it } from 'vitest';
 import {
   buildJoinedMapping,
+  buildSrgToMcpMapping,
   lookupInMcpSrg,
   parseMcpCsv,
   tsrgToSrg,
@@ -204,6 +205,50 @@ describe('tsrgToSrg', () => {
     expect(result.srg).toContain(
       'MD: a/a (I)La; net/minecraft/util/text/TextFormatting/getTextWithoutFormattingCodes (I)La;',
     );
+  });
+});
+
+describe('buildSrgToMcpMapping', () => {
+  // Forge mods keep readable class names and SRG members; the mapping must
+  // rename members only, with descriptors normalized to SRG class space.
+  const SRG = [
+    'CL: sv net/minecraft/entity/Entity',
+    'FD: sv/f net/minecraft/entity/Entity/field_70170_p',
+    'MD: sv/a ()Ljava/lang/String; net/minecraft/entity/Entity/func_110646_a ()Ljava/lang/String;',
+    'MD: sv/c (Lsv;)V net/minecraft/entity/Entity/func_96298_a (Lsv;)V',
+  ].join('\n');
+
+  const result = buildSrgToMcpMapping(SRG, FIELDS_CSV, METHODS_CSV);
+
+  it('emits member-only lines with identical class names on both sides', () => {
+    expect(result.srg).not.toContain('CL:');
+    expect(result.srg).toContain(
+      'FD: net/minecraft/entity/Entity/field_70170_p net/minecraft/entity/Entity/worldObj',
+    );
+    expect(result.fields).toBe(1);
+  });
+
+  it('renames methods through the CSV and rewrites obf descriptors to SRG classes', () => {
+    expect(result.srg).toContain(
+      'MD: net/minecraft/entity/Entity/func_110646_a ()Ljava/lang/String; ' +
+        'net/minecraft/entity/Entity/getTextWithoutFormattingCodes ()Ljava/lang/String;',
+    );
+    // The (Lsv;)V descriptor's obf class ref is rewritten via the class map.
+    expect(result.srg).toContain(
+      'MD: net/minecraft/entity/Entity/func_96298_a (Lnet/minecraft/entity/Entity;)V ' +
+        'net/minecraft/entity/Entity/formattingCode (Lnet/minecraft/entity/Entity;)V',
+    );
+    expect(result.methods).toBe(2);
+  });
+
+  it('skips members absent from the CSVs (they keep their SRG name)', () => {
+    const partial = buildSrgToMcpMapping(
+      'MD: sv/b ()V net/minecraft/entity/Entity/func_70071_h ()V',
+      FIELDS_CSV,
+      METHODS_CSV,
+    );
+    expect(partial.srg).toBe('');
+    expect(partial.methods).toBe(0);
   });
 });
 

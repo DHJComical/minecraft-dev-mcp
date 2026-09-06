@@ -5,7 +5,7 @@ Reference for AI/agent operators working in this repo. Grounded in `CLAUDE.md` a
 ## Project Snapshot
 - MCP server that lets agents decompile, remap, search, and analyze Minecraft (alpha 1.0.10+; obfuscated through 1.21.11, unobfuscated after the 26.1 cutover). Pre-1.14.4 versions: 1.7.10–1.13.2 use Forge **MCP** mappings, pre-1.7.10 (alpha 1.0.10–1.6.4) use Ornithe **feather/calamus**; 1.14–1.14.3 work via yarn.
 - Phase 1 & 2 complete (core + advanced tools); 29 integration tests green as of 2025-12-06.
-- Phase 3 complete (third-party mod analysis, 2025-12-15): mod decompilation/search/indexing tools exist (`decompile_mod_jar`, `search_mod_code`, `index_mod`, `search_mod_indexed`).
+- Phase 3 complete (third-party mod analysis, 2025-12-15): mod decompilation/search/indexing tools exist (`decompile_mod_jar`, `search_mod_code`, `index_mod`, `search_mod_indexed`). `remap_mod_jar` is loader-aware: Fabric/Quilt mods remap intermediary→named; Forge/NeoForge mods for 1.7.10–1.13.2 remap SRG members→MCP via `mcp-srg-<v>.srg` (member-only; the SRG-named vanilla JAR `mcp-srg-vanilla-<v>.jar` is built as tiny-remapper classpath).
 - Stack: Node 18+/ESM-only (`"type": "module"`), TS 5.7, Java 17+ (21+ for newest MC), better-sqlite3, VineFlower decompiler, tiny-remapper.
 
 ## What Agents Should Prioritize

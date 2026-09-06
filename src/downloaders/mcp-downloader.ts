@@ -3,8 +3,21 @@ import { dirname, join } from 'node:path';
 import { MappingNotFoundError } from '../utils/errors.js';
 import { ensureDir } from '../utils/file-utils.js';
 import { logger } from '../utils/logger.js';
-import { buildJoinedMapping, tsrgToSrg, zipGetEntry } from '../utils/mcp-mappings.js';
-import { getMcpConfigZipPath, getMcpJoinedSrgPath, getMcpSrgPath, paths } from '../utils/paths.js';
+import {
+  buildJoinedMapping,
+  buildSrgToMcpMapping,
+  reorderSrgContent,
+  tsrgToSrg,
+  zipGetEntry,
+} from '../utils/mcp-mappings.js';
+import {
+  getMcpConfigZipPath,
+  getMcpJoinedSrgPath,
+  getMcpObfToSrgPath,
+  getMcpSrgPath,
+  getMcpSrgToMcpPath,
+  paths,
+} from '../utils/paths.js';
 import { downloadFile } from './http-client.js';
 
 /**
@@ -22,8 +35,11 @@ import { downloadFile } from './http-client.js';
  * - both eras: `de.oceanlabs.mcp:mcp_stable:<build>-<version>` → ZIP with
  *   `fields.csv`/`methods.csv`/`params.csv` (SRG → MCP names)
  *
- * The generated artifact is an obfuscated → MCP SRG file (`mcp-<version>.srg`)
- * which tiny-remapper can consume directly (with `ignoreFieldDesc`).
+ * Generated artifacts (consumed directly by tiny-remapper with
+ * `ignoreFieldDesc`):
+ * - `mcp-<version>.srg`: obfuscated → MCP (remapping the vanilla JAR)
+ * - `mcp-srg-<version>.srg`: SRG → MCP member-only (remapping Forge mods,
+ *   whose classes are already SRG/official named)
  */
 
 const FORGE_MAVEN_BASE = 'https://maven.minecraftforge.net';
@@ -84,6 +100,60 @@ export async function downloadMcpMappings(version: string): Promise<string> {
     return outputPath;
   }
 
+  const { srgContent, fields, methods } = await loadMcpInputs(version);
+
+  logger.info(`Building MCP mappings for ${version} (joined.srg -> MCP names)`);
+  const result = buildJoinedMapping(srgContent, fields, methods);
+  logger.info(
+    `MCP mapping built: ${result.classes} classes, ${result.fields} fields, ${result.methods} methods`,
+  );
+
+  ensureDir(dirname(outputPath));
+  writeFileSync(outputPath, result.srg, 'utf8');
+  logger.info(`MCP mappings written: ${outputPath}`);
+
+  return outputPath;
+}
+
+/**
+ * Build the SRG → MCP member-only mapping used to remap Forge mods for this
+ * version (Forge mods ship with SRG member names and unchanged class names).
+ * Returns the path to the generated `mcp-srg-<version>.srg`.
+ */
+export async function downloadSrgToMcpMappings(version: string): Promise<string> {
+  const outputPath = getMcpSrgToMcpPath(version);
+  if (existsSync(outputPath)) {
+    logger.info(`Using cached SRG→MCP mappings: ${outputPath}`);
+    return outputPath;
+  }
+
+  const { buildKey, srgContent, fields, methods } = await loadMcpInputs(version);
+
+  logger.info(`Building SRG→MCP member mappings for ${version} (stable ${buildKey})`);
+  const result = buildSrgToMcpMapping(srgContent, fields, methods);
+  logger.info(
+    `SRG→MCP mapping built: ${result.classes} classes, ${result.fields} fields, ${result.methods} methods`,
+  );
+
+  ensureDir(dirname(outputPath));
+  writeFileSync(outputPath, result.srg, 'utf8');
+  logger.info(`SRG→MCP mappings written: ${outputPath}`);
+
+  return outputPath;
+}
+
+/**
+ * Shared acquisition for both MCP mapping builders: the SRG-shaped
+ * obf→srg content (raw joined.srg for 1.7.10–1.12.2, tsrgToSrg output for
+ * 1.13.x) plus the mcp_stable CSV contents.
+ */
+async function loadMcpInputs(version: string): Promise<{
+  mcVersion: string;
+  buildKey: string;
+  srgContent: string;
+  fields: string;
+  methods: string;
+}> {
   const mcVersion = resolveMcVersion(version);
   const mcpConfigStable = MCP_CONFIG_VERSIONS[mcVersion];
   const buildKey = mcpConfigStable ?? MCP_STABLE_BUILD[mcVersion];
@@ -97,7 +167,7 @@ export async function downloadMcpMappings(version: string): Promise<string> {
   }
 
   // 1. joined.srg / joined.tsrg (obfuscated → SRG)
-  let joinedSrg: string;
+  let srgContent: string;
   if (mcpConfigStable) {
     // 1.13.x: joined.tsrg inside the mcp_config zip (tsrg v1, tab-indented).
     const mcpConfigZipPath = getMcpConfigZipPath(version);
@@ -125,7 +195,7 @@ export async function downloadMcpMappings(version: string): Promise<string> {
         `config/joined.tsrg not found in ${mcpConfigZipPath}`,
       );
     }
-    joinedSrg = tsrgToSrg(new TextDecoder().decode(joinedTsrgBuffer)).srg;
+    srgContent = tsrgToSrg(new TextDecoder().decode(joinedTsrgBuffer)).srg;
   } else {
     // 1.7.10–1.12.2: joined.srg inside the mcp srg zip.
     const joinedSrgZipPath = getMcpJoinedSrgPath(version);
@@ -149,7 +219,7 @@ export async function downloadMcpMappings(version: string): Promise<string> {
     if (!joinedSrgBuffer) {
       throw new MappingNotFoundError(version, 'mcp', `joined.srg not found in ${joinedSrgZipPath}`);
     }
-    joinedSrg = new TextDecoder().decode(joinedSrgBuffer);
+    srgContent = new TextDecoder().decode(joinedSrgBuffer);
   }
 
   // 2. fields.csv / methods.csv from mcp_stable
@@ -171,7 +241,6 @@ export async function downloadMcpMappings(version: string): Promise<string> {
     logger.info(`Using cached MCP stable zip: ${stableZipPath}`);
   }
 
-  // 3. Rebuild joined.srg → notch-mcp.srg (obfuscated → MCP)
   const fieldsCsv = readZipEntry(stableZipPath, 'fields.csv');
   const methodsCsv = readZipEntry(stableZipPath, 'methods.csv');
   if (!fieldsCsv || !methodsCsv) {
@@ -182,18 +251,34 @@ export async function downloadMcpMappings(version: string): Promise<string> {
     );
   }
 
-  const fields = new TextDecoder().decode(fieldsCsv);
-  const methods = new TextDecoder().decode(methodsCsv);
+  return {
+    mcVersion,
+    buildKey,
+    srgContent,
+    fields: new TextDecoder().decode(fieldsCsv),
+    methods: new TextDecoder().decode(methodsCsv),
+  };
+}
 
-  logger.info(`Building MCP mappings for ${version} (joined.srg -> MCP names)`);
-  const result = buildJoinedMapping(joinedSrg, fields, methods);
-  logger.info(
-    `MCP mapping built: ${result.classes} classes, ${result.fields} fields, ${result.methods} methods`,
-  );
+/**
+ * Build the ordered obfuscated → SRG mapping file (FD-first layout) used to
+ * produce an SRG-named vanilla JAR. That JAR is the classpath against which
+ * Forge mods' SRG member references get remapped.
+ * Returns the path to the generated `mcp-obf-srg-<version>.srg`.
+ */
+export async function downloadObfToSrgMappings(version: string): Promise<string> {
+  const outputPath = getMcpObfToSrgPath(version);
+  if (existsSync(outputPath)) {
+    logger.info(`Using cached obf→SRG mappings: ${outputPath}`);
+    return outputPath;
+  }
+
+  const { srgContent } = await loadMcpInputs(version);
+  const ordered = reorderSrgContent(srgContent);
 
   ensureDir(dirname(outputPath));
-  writeFileSync(outputPath, result.srg, 'utf8');
-  logger.info(`MCP mappings written: ${outputPath}`);
+  writeFileSync(outputPath, ordered, 'utf8');
+  logger.info(`obf→SRG mappings written: ${outputPath}`);
 
   return outputPath;
 }

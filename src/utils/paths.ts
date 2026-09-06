@@ -163,6 +163,30 @@ export function getMcpSrgPath(version: string): string {
 }
 
 /**
+ * Get the generated SRG → MCP member-only SRG path for remapping Forge mods
+ * (class names identical on both sides; members `func_/field_NNNNN` → MCP).
+ */
+export function getMcpSrgToMcpPath(version: string): string {
+  return join(paths.mappings(), `mcp-srg-${version}.srg`);
+}
+
+/**
+ * Get the generated ordered obfuscated → SRG mapping path (FD-first layout)
+ * used to build the SRG-named vanilla JAR for Forge mod remapping.
+ */
+export function getMcpObfToSrgPath(version: string): string {
+  return join(paths.mappings(), `mcp-obf-srg-${version}.srg`);
+}
+
+/**
+ * Get the cached SRG-named vanilla JAR path — the classpath against which
+ * Forge mods' SRG member references are remapped.
+ */
+export function getMcpSrgVanillaJarPath(version: string): string {
+  return join(paths.remapped(), `mcp-srg-vanilla-${version}.jar`);
+}
+
+/**
  * Get registry data path
  */
 export function getRegistryPath(version: string): string {

@@ -28,6 +28,7 @@ import type {
   AccessWidenerEntry,
   MappingType,
   MixinClass,
+  ModLoader,
 } from '../types/minecraft.js';
 import { extractJavaSymbols } from '../utils/java-symbols.js';
 import { logger } from '../utils/logger.js';
@@ -115,7 +116,13 @@ const RemapModJarSchema = z.object({
     .string()
     .optional()
     .describe('Minecraft version the mod is for (auto-detected from mod metadata if not provided)'),
-  toMapping: z.enum(['yarn', 'mojmap']).describe('Target mapping type'),
+  loader: z
+    .enum(['auto', 'fabric', 'quilt', 'forge', 'neoforge'])
+    .optional()
+    .describe(
+      'Mod loader the JAR targets. `auto` (default) detects it from mod metadata. Forge/NeoForge mods require 1.7.10-1.13.2 (SRG->MCP member remap).',
+    ),
+  toMapping: z.enum(['yarn', 'mojmap', 'feather']).describe('Target mapping type'),
 });
 
 const FindMappingSchema = z.object({
@@ -386,7 +393,7 @@ export const tools = [
   {
     name: 'remap_mod_jar',
     description:
-      'Remap a Fabric mod JAR from intermediary mappings to human-readable mappings. Useful for reading mod source code. Supports both WSL (/mnt/c/...) and Windows (C:\\...) paths.',
+      'Remap a mod JAR to human-readable names. Loader-aware: Fabric/Quilt mods (intermediary -> yarn/mojmap/feather) and Forge/NeoForge mods for 1.7.10-1.13.2 (SRG member names -> MCP names, loader auto-detected from mod metadata). Useful for reading mod source code. Supports both WSL (/mnt/c/...) and Windows (C:\\...) paths.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -403,10 +410,17 @@ export const tools = [
           description:
             'Minecraft version the mod is for (auto-detected from mod metadata if not provided)',
         },
+        loader: {
+          type: 'string',
+          enum: ['auto', 'fabric', 'quilt', 'forge', 'neoforge'],
+          description:
+            'Mod loader the JAR targets. `auto` (default) detects it from mod metadata (fabric.mod.json / mods.toml / mcmod.info). Forge/NeoForge mods require 1.7.10-1.13.2 (SRG->MCP member remap); 1.14+ Forge mods are not supported yet.',
+        },
         toMapping: {
           type: 'string',
-          enum: ['yarn', 'mojmap'],
-          description: 'Target mapping type',
+          enum: ['yarn', 'mojmap', 'feather'],
+          description:
+            'Target mapping type (Fabric-like mods only). Forge/NeoForge mods always remap to `mcp` names and ignore this.',
         },
       },
       required: ['inputJar', 'outputJar', 'toMapping'],
@@ -1096,6 +1110,7 @@ export async function handleRemapModJar(args: unknown) {
     inputJar,
     outputJar,
     mcVersion: providedMcVersion,
+    loader: providedLoader,
     toMapping,
   } = RemapModJarSchema.parse(args);
 
@@ -1133,11 +1148,30 @@ export async function handleRemapModJar(args: unknown) {
       logger.info(`Auto-detected Minecraft version: ${mcVersion}`);
     }
 
+    // Resolve the mod loader: explicit param wins, else detect from metadata
+    // (the version auto-detection pass above already analyzed when possible).
+    let loader: ModLoader = providedLoader && providedLoader !== 'auto' ? providedLoader : 'fabric';
+    if (providedLoader === 'auto') {
+      try {
+        const detection = await modAnalyzerService.analyzeMod(normalizedInputJar);
+        if (detection.loader && detection.loader !== 'unknown') {
+          loader = detection.loader;
+        }
+      } catch (detectError) {
+        logger.warn(
+          `Loader auto-detection failed, assuming fabric: ${detectError instanceof Error ? detectError.message : String(detectError)}`,
+        );
+      }
+    }
+    logger.info(`Mod loader: ${loader}`);
+
     const result = await remapService.remapModJar(
       normalizedInputJar,
       normalizedOutputJar,
       mcVersion,
       toMapping as MappingType,
+      undefined,
+      loader,
     );
 
     return {

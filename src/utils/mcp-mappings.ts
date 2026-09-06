@@ -200,6 +200,103 @@ export function tsrgToSrg(tsrg: string): TsrgToSrgResult {
 }
 
 /**
+ * Build a member-only SRG → MCP mapping for remapping Forge mods.
+ *
+ * Forge mods for 1.7.10–1.13.2 are distributed with SRG names: classes keep
+ * their (readable) SRG/official names (`net/minecraft/...`) while members are
+ * `func_`/`field_NNNNN`. Remapping such a mod to MCP names therefore only
+ * renames members — class names are identical on both sides and no `CL:`
+ * lines are emitted.
+ *
+ * Input is any SRG-shaped obf→srg content (raw `joined.srg` for 1.7.10–1.12.2
+ * or `tsrgToSrg` output for 1.13.x) plus the `mcp_stable` CSVs. Method
+ * descriptors are normalized to the SRG class space (rewriting obfuscated
+ * class references via the class map) so they match the descriptors found in
+ * the mod's bytecode; for joined.srg the target side already uses SRG class
+ * names and the rewrite is a no-op.
+ *
+ * Members absent from the CSVs are skipped (the mod keeps its SRG name).
+ */
+export function buildSrgToMcpMapping(
+  srgContent: string,
+  fieldsCsv: string,
+  methodsCsv: string,
+): McpJoinedMapping {
+  const fields = parseMcpCsv(fieldsCsv);
+  const methods = parseMcpCsv(methodsCsv);
+
+  // Pass 1: collect the obf → SRG class map for descriptor normalization.
+  const classMap = new Map<string, string>();
+  let classes = 0;
+  for (const rawLine of srgContent.split(/\r?\n/)) {
+    const line = rawLine.trimEnd();
+    if (!line.startsWith('CL:')) continue;
+    const m = line.match(/^CL: (\S+) (\S+)$/);
+    if (m) {
+      classMap.set(m[1], m[2]);
+      classes++;
+    }
+  }
+
+  const rewrite = (desc: string): string =>
+    desc.replace(/L([^;]+);/g, (full, name: string) => {
+      const mapped = classMap.get(name);
+      return mapped ? `L${mapped};` : full;
+    });
+
+  // Pass 2: emit member-only lines keyed by SRG class names.
+  const fds: string[] = [];
+  const mds: string[] = [];
+  for (const rawLine of srgContent.split(/\r?\n/)) {
+    const line = rawLine.trimEnd();
+    if (line.startsWith('FD:')) {
+      const m = line.match(/^FD: (\S+) (\S+)\/(\S+)$/);
+      if (!m) continue;
+      const mcp = fields.get(m[3]);
+      if (!mcp) continue;
+      fds.push(`FD: ${m[2]}/${m[3]} ${m[2]}/${mcp}`);
+      continue;
+    }
+    if (line.startsWith('MD:')) {
+      const m = line.match(
+        /^MD: (\S+)\/(\S+)\s+\(([^)]*)\)(\S+)\s+(\S+)\/(\S+)\s+\(([^)]*)\)(\S+)/,
+      );
+      if (!m) continue;
+      const mcp = methods.get(m[6]);
+      if (!mcp) continue;
+      const desc = rewrite(`(${m[7]})${m[8]}`);
+      mds.push(`MD: ${m[5]}/${m[6]} ${desc} ${m[5]}/${mcp} ${desc}`);
+      continue;
+    }
+  }
+
+  return {
+    classes,
+    fields: fds.length,
+    methods: mds.length,
+    srg: [...fds, ...mds].join('\n'),
+  };
+}
+
+/**
+ * Reorder SRG content into the FD-first layout mapping-io's `detectFormat`
+ * requires (raw `joined.srg` files start with `PK:`/`CL:` lines and overflow
+ * its mark buffer). `PK:` lines are dropped; classes are fully qualified.
+ */
+export function reorderSrgContent(content: string): string {
+  const fds: string[] = [];
+  const cls: string[] = [];
+  const mds: string[] = [];
+  for (const rawLine of content.split(/\r?\n/)) {
+    const line = rawLine.trimEnd();
+    if (line.startsWith('FD:')) fds.push(line);
+    else if (line.startsWith('CL:')) cls.push(line);
+    else if (line.startsWith('MD:')) mds.push(line);
+  }
+  return [...fds, ...cls, ...mds].join('\n');
+}
+
+/**
  * Minimal lookup result for an obfuscated ↔ MCP symbol lookup.
  */
 export interface McpLookupHit {

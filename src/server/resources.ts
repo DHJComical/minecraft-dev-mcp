@@ -314,9 +314,16 @@ async function handleMappingsResource(uri: string, version: string, mapping: str
   const mappingService = getMappingService();
 
   // Validate mapping type
-  if (mapping !== 'yarn' && mapping !== 'mojmap' && mapping !== 'intermediary' && mapping !== 'mcp') {
+  if (
+    mapping !== 'yarn' &&
+    mapping !== 'mojmap' &&
+    mapping !== 'intermediary' &&
+    mapping !== 'mcp' &&
+    mapping !== 'calamus' &&
+    mapping !== 'feather'
+  ) {
     throw new Error(
-      `Invalid mapping type: ${mapping}. Must be 'yarn', 'mojmap', 'intermediary', or 'mcp'`,
+      `Invalid mapping type: ${mapping}. Must be 'yarn', 'mojmap', 'intermediary', 'mcp', 'calamus', or 'feather'`,
     );
   }
 

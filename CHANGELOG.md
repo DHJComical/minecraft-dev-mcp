@@ -47,6 +47,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`npm run test:manual:1.7.10`, `npm run test:manual:1.13.2`) covering
   download → mapping build → remap → decompile → source retrieval.
 
+- **Loader-aware `remap_mod_jar`.** Forge/NeoForge mods for 1.7.10–1.13.2
+  (distributed with SRG member names and unchanged class names) can now be
+  remapped to MCP names: a member-only SRG→MCP mapping is built from the same
+  Forge maven artifacts, and the SRG-named vanilla JAR is passed to
+  tiny-remapper as a classpath so inheritance is resolved correctly. The
+  loader is auto-detected from mod metadata (`fabric.mod.json` / `mods.toml`
+  / `mcmod.info`) or set explicitly via the new `loader` parameter. Fabric
+  mods targeting pre-1.7.10 versions can remap to `feather`. (Forge mods for
+  1.14+ are not supported — no published SRG→member mappings exist for those
+  eras.)
+
 ### Fixed
 
 - **`find_mapping` field lookups for `mcp` silently returned misses.**

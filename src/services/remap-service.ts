@@ -1,9 +1,13 @@
 import { existsSync } from 'node:fs';
 import { getCacheManager } from '../cache/cache-manager.js';
+import {
+  downloadObfToSrgMappings,
+  downloadSrgToMcpMappings,
+} from '../downloaders/mcp-downloader.js';
 import { getTinyRemapper } from '../java/tiny-remapper.js';
-import type { MappingType } from '../types/minecraft.js';
+import type { MappingType, ModLoader } from '../types/minecraft.js';
 import { logger } from '../utils/logger.js';
-import { getRemappedJarPath } from '../utils/paths.js';
+import { getMcpSrgVanillaJarPath, getRemappedJarPath } from '../utils/paths.js';
 import { getMappingService } from './mapping-service.js';
 import { getVersionManager } from './version-manager.js';
 
@@ -395,8 +399,13 @@ export class RemapService {
   }
 
   /**
-   * Remap a mod JAR from intermediary to named mappings
-   * This is for remapping Fabric mod JARs to use human-readable names
+   * Remap a mod JAR to human-readable names.
+   *
+   * Loader-aware:
+   * - `fabric`/`quilt` mods (1.14+, or Ornithe/LegacyFabric pre-1.7.10) use
+   *   intermediary names → remap intermediary → named.
+   * - `forge`/`neoforge` mods for 1.7.10–1.13.2 ship with SRG member names
+   *   and unchanged class names → member-only remap via the SRG→MCP mapping.
    */
   async remapModJar(
     inputJar: string,
@@ -404,8 +413,13 @@ export class RemapService {
     mcVersion: string,
     toMapping: MappingType,
     onProgress?: (progress: string) => void,
+    loader: ModLoader = 'fabric',
   ): Promise<string> {
-    logger.info(`Remapping mod JAR: ${inputJar} -> ${outputJar}`);
+    logger.info(`Remapping mod JAR: ${inputJar} -> ${outputJar} (loader: ${loader})`);
+
+    if (loader === 'forge' || loader === 'neoforge') {
+      return await this.remapForgeModJar(inputJar, outputJar, mcVersion, onProgress);
+    }
 
     // Get mappings for the target mapping type
     const mappingsFile = await this.mappingService.getMappings(mcVersion, toMapping);
@@ -424,6 +438,66 @@ export class RemapService {
 
     logger.info(`Mod JAR remapped: ${outputJar}`);
     return outputJar;
+  }
+
+  /**
+   * Remap a Forge mod JAR (SRG member names) to MCP names.
+   *
+   * Forge mods for 1.7.10–1.13.2 keep readable class names and use
+   * `func_`/`field_NNNNN` members, so a member-only SRG→MCP mapping (class
+   * names identical on both sides) is what tiny-remapper consumes. The SRG
+   * -named vanilla JAR is passed as classpath so the remapper can resolve
+   * inheritance for MC classes the mod references but does not contain;
+   * members the CSVs do not cover keep their SRG name.
+   */
+  private async remapForgeModJar(
+    inputJar: string,
+    outputJar: string,
+    mcVersion: string,
+    onProgress?: (progress: string) => void,
+  ): Promise<string> {
+    const mappingsFile = await downloadSrgToMcpMappings(mcVersion);
+    const classpathJar = await this.ensureSrgVanillaJar(mcVersion);
+
+    await this.tinyRemapper.remap(inputJar, outputJar, mappingsFile, {
+      fromNamespace: 'source',
+      toNamespace: 'target',
+      threads: 4,
+      rebuildSourceFilenames: true,
+      ignoreFieldDesc: true,
+      classpath: [classpathJar],
+      onProgress,
+    });
+
+    logger.info(`Forge mod JAR remapped: ${outputJar}`);
+    return outputJar;
+  }
+
+  /**
+   * Build (or reuse) the SRG-named vanilla client JAR: the obfuscated client
+   * remapped through the ordered obf→SRG mapping. This mirrors how Forge's
+   * SRG-named mod environment sees MC classes.
+   */
+  private async ensureSrgVanillaJar(mcVersion: string): Promise<string> {
+    const srgJarPath = getMcpSrgVanillaJarPath(mcVersion);
+    if (existsSync(srgJarPath)) {
+      logger.info(`Using cached SRG vanilla JAR: ${srgJarPath}`);
+      return srgJarPath;
+    }
+
+    const obfToSrgFile = await downloadObfToSrgMappings(mcVersion);
+    const clientJar = await this.versionManager.getVersionJar(mcVersion);
+
+    logger.info(`Building SRG-named vanilla JAR for ${mcVersion}`);
+    await this.tinyRemapper.remap(clientJar, srgJarPath, obfToSrgFile, {
+      fromNamespace: 'source',
+      toNamespace: 'target',
+      threads: 4,
+      rebuildSourceFilenames: false,
+      ignoreFieldDesc: true,
+    });
+    logger.info(`SRG vanilla JAR created: ${srgJarPath}`);
+    return srgJarPath;
   }
 }
 

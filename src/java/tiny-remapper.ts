@@ -17,6 +17,11 @@ export interface TinyRemapperOptions {
    * tiny-remapper otherwise throws "null src field desc".
    */
   ignoreFieldDesc?: boolean;
+  /**
+   * Classpath JARs for inheritance resolution when the input references
+   * classes it does not contain (positional args after `<to>`).
+   */
+  classpath?: string[];
   onProgress?: (progress: string) => void;
 }
 
@@ -56,12 +61,20 @@ export class TinyRemapperWrapper {
       rebuildSourceFilenames = true,
       ignoreConflicts = false,
       ignoreFieldDesc = false,
+      classpath,
       onProgress,
     } = options;
 
     // Build tiny-remapper arguments
-    // Format: <input> <output> <mappings> <from> <to> [--option=value]
+    // Format: <input> <output> <mappings> <from> <to> [<classpath>]... [--option=value]
     const args: string[] = [inputJar, outputJar, mappingsFile, fromNamespace, toNamespace];
+
+    // Classpath JARs let the remapper resolve inheritance for classes the
+    // input references but does not contain (e.g. remapping a mod against
+    // the vanilla JAR).
+    if (classpath) {
+      args.push(...classpath);
+    }
 
     // Options must use --option=value format (NOT --option value)
     if (threads > 1) {
