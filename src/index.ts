@@ -104,6 +104,7 @@ class MinecraftDevMCPServer {
           tools: {},
           resources: {},
         },
+        instructions: `You are working with the Minecraft Dev MCP server. Whenever the user asks about Minecraft internals — net.minecraft.* classes, methods, or fields; Fabric, Quilt, Forge, or NeoForge modding APIs; Mixin targets and injection points; Access Widener or Access Transformer entries; intermediary/yarn/mojmap/MCP/feather mapping names; block/item/entity registries; differences between Minecraft versions; or the contents of a mod JAR — always call this server's tools to check the real decompiled source for the exact Minecraft version instead of answering from training knowledge. Minecraft internals vary heavily by version, so version-specific verification is required. Select tools by task: get_minecraft_source for a single class; decompile_minecraft_version first when a version is not yet cached; search_minecraft_code (or index_minecraft_version + search_indexed for broad or repeated searches) to find code; find_mapping to translate names between mapping systems; analyze_mod_jar then remap_mod_jar/decompile_mod_jar for third-party mods; analyze_mixin, validate_access_widener, validate_access_transformer for mod-code validation; compare_versions/compare_versions_detailed for version diffs; get_registry_data for registries (1.13+ only). Default mappings: yarn for 1.14-1.21.11, mojmap for 26.1+, mcp for 1.7.10-1.13.2, feather for pre-1.7.10.`,
       },
     );
 
