@@ -5,6 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.0] - 2026-09-06
+
+Agent discoverability release: teach agents when to call the server, and fix
+the mapping enums that made pre-1.14 versions look unsupported.
+
+### Added
+
+- **Server instructions** (`src/index.ts`): the MCP server now sends global
+  `instructions` telling agents to verify Minecraft internals against the real
+  decompiled source for the exact version (instead of training knowledge),
+  with per-task tool routing and default mappings per era (yarn 1.14–1.21.11,
+  mojmap 26.1+, mcp 1.7.10–1.13.2, feather pre-1.7.10).
+- **Trigger-first tool descriptions**: all 21 tool descriptions now open with
+  "When the user asks about X, use this", so agents route user questions
+  (class behavior, obfuscated names, registries, version diffs, mod contents,
+  mixin/AW/AT validation) to the right tool.
+- **Bundled agent skill** (`skills/minecraft-dev/`): now shipped in the npm
+  package (`files` includes `skills/`) with install docs in the README for
+  Claude Code, Cursor, Codex CLI, and OpenCode — agents without MCP can call
+  `minecraft-dev-cli` instead.
+- **Multi-client MCP setup docs** (README): copy-paste configs for Cursor,
+  VS Code (`.vscode/mcp.json` `servers` shape), Codex CLI (`config.toml`),
+  Windsurf, and Gemini CLI, plus the global-install `PATH` note.
+
+### Fixed
+
+- **Mapping enums widened to `yarn`/`mojmap`/`mcp`/`feather`** on 14 tools
+  (`search_minecraft_code`, `compare_versions`, `analyze_mixin`,
+  `validate_access_widener`, `validate_access_transformer`,
+  `compare_versions_detailed`, `index_minecraft_version`, `search_indexed`,
+  `decompile_mod_jar`, `search_mod_code`, `index_mod`,
+  `search_mod_indexed`, plus the zod schemas and the
+  `minecraft://source`/`minecraft://index` resource validators). The backends
+  always supported mcp/feather — only the exposed schemas claimed
+  `yarn`/`mojmap`, so agents concluded pre-1.14 versions were unsupported and
+  had no valid mapping to pass for e.g. 1.12.2 (which needs `mcp`, as it has
+  no mojmap). Each mapping description now also states its version era.
+
 ## [1.6.1] - 2026-09-06
 
 Documentation-only release: 1.6.0 shipped with the README frozen before the
