@@ -109,6 +109,26 @@ export class RemapService {
       return await this.remapMcp(version, inputJar, outputPath, onProgress);
     }
 
+    // Feather (Ornithe, pre-1.7.10) mirrors yarn: official -> calamus -> named
+    if (mapping === 'feather') {
+      return await this.remapFeather(version, inputJar, outputPath, onProgress);
+    }
+
+    // Calamus alone (obfuscated -> Ornithe intermediary classes) when the
+    // caller asks for it explicitly.
+    if (mapping === 'calamus') {
+      const mappingsFile = await this.mappingService.getMappings(version, 'calamus');
+      await this.tinyRemapper.remap(inputJar, outputPath, mappingsFile, {
+        fromNamespace: 'official',
+        toNamespace: 'intermediary',
+        threads: 4,
+        rebuildSourceFilenames: true,
+        onProgress,
+      });
+      logger.info(`Calamus remapping complete: ${outputPath}`);
+      return outputPath;
+    }
+
     // Get mappings
     const mappingsFile = await this.mappingService.getMappings(version, mapping);
 
@@ -254,6 +274,68 @@ export class RemapService {
   }
 
   /**
+   * Remap using Feather mappings (two-step process: official -> calamus -> named)
+   *
+   * Ornithe's feather is yarn's counterpart for pre-1.7.10 versions and is
+   * built on calamus the same way yarn is built on intermediary, so the
+   * two-step chain is identical in shape.
+   */
+  private async remapFeather(
+    version: string,
+    inputJar: string,
+    outputPath: string,
+    onProgress?: (progress: string) => void,
+  ): Promise<string> {
+    const { join } = await import('node:path');
+    const { tmpdir } = await import('node:os');
+    const { mkdtempSync } = await import('node:fs');
+
+    const tempDir = mkdtempSync(join(tmpdir(), 'mc-remap-feather-'));
+    const calamusJar = join(tempDir, `${version}-calamus.jar`);
+
+    try {
+      // Step 1: Remap official -> calamus intermediary
+      logger.info(`Step 1/2: Remapping ${version} from official to calamus`);
+      const calamusMappings = await this.mappingService.getMappings(version, 'calamus');
+
+      await this.tinyRemapper.remap(inputJar, calamusJar, calamusMappings, {
+        fromNamespace: 'official',
+        toNamespace: 'intermediary',
+        threads: 4,
+        rebuildSourceFilenames: false,
+        onProgress: (msg) => onProgress?.(`[1/2] ${msg}`),
+      });
+
+      // Step 2: Remap calamus intermediary -> named (Feather)
+      logger.info(`Step 2/2: Remapping ${version} from calamus to feather`);
+      const featherMappings = await this.mappingService.getMappings(version, 'feather');
+
+      await this.tinyRemapper.remap(calamusJar, outputPath, featherMappings, {
+        fromNamespace: 'intermediary',
+        toNamespace: 'named',
+        threads: 4,
+        rebuildSourceFilenames: true,
+        ignoreConflicts: true, // feather coverage has gaps in old eras
+        onProgress: (msg) => onProgress?.(`[2/2] ${msg}`),
+      });
+
+      logger.info(`Feather remapping complete: ${outputPath}`);
+      return outputPath;
+    } finally {
+      // Clean up temp files
+      try {
+        const { unlinkSync, rmdirSync } = await import('node:fs');
+        if (existsSync(calamusJar)) {
+          unlinkSync(calamusJar);
+        }
+        rmdirSync(tempDir);
+      } catch (error) {
+        logger.warn(`Failed to clean up temp directory: ${tempDir}`);
+      }
+    }
+  }
+
+  /**
    * Remap using MCP mappings (single-step: official/obfuscated -> MCP named).
    *
    * MCP mappings (pre-1.14.4) are obfuscated -> MCP-name SRG files. Unlike
@@ -296,6 +378,10 @@ export class RemapService {
         return { fromNamespace: 'official', toNamespace: 'intermediary' };
       case 'mcp':
         return { fromNamespace: 'source', toNamespace: 'target' };
+      case 'calamus':
+        return { fromNamespace: 'official', toNamespace: 'intermediary' };
+      case 'feather':
+        return { fromNamespace: 'intermediary', toNamespace: 'named' };
       default:
         throw new Error(`Unsupported mapping type: ${mapping}`);
     }

@@ -35,7 +35,10 @@ manual/
   v1.13.2/            # MCP pipeline tests via MCPConfig joined.tsrg
     test-constants.ts
     full-suite.test.ts
-  v1.7.10/            # MCP pipeline tests (oldest supported version)
+  v1.7.10/            # MCP pipeline tests (oldest MCP-supported version)
+    test-constants.ts
+    full-suite.test.ts
+  vb1.7.3/            # Feather/Calamus pipeline tests (Ornithe, pre-1.7.10)
     test-constants.ts
     full-suite.test.ts
   mojmap/             # Mojmap remap/decompile tests
@@ -68,6 +71,7 @@ npm run test:manual:1.19.4
 npm run test:manual:1.12.2
 npm run test:manual:1.7.10
 npm run test:manual:1.13.2
+npm run test:manual:b1.7.3
 npm run test:manual:mojmap
 ```
 
@@ -113,4 +117,6 @@ Default matrix includes:
   is unsupported (<1.13) and must fail with a clear error
 - `1.13.2`: obfuscated client, MCP via MCPConfig `joined.tsrg` (no yarn,
   no official mappings for this era); registry boundary version
+- `b1.7.3` (and pre-1.7.10 generally): Ornithe feather/calamus two-step
+  remap; non-1.x version ids fail fast for registry
 - `26.1+` snapshots: unobfuscated client, use `mojmap` path, Yarn should fail with actionable guidance

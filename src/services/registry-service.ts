@@ -15,7 +15,11 @@ import { getVersionManager } from './version-manager.js';
  */
 function isPreDataGenVersion(version: string): boolean {
   const m = version.match(/^(\d+)\.(\d+)\.?/);
-  if (!m) return false;
+  if (!m) {
+    // Non-1.x ids (alpha 'a1.x', beta 'b1.x', pre-classic 'rd-*') all predate
+    // the data generator by many years.
+    return true;
+  }
   const major = Number.parseInt(m[1], 10);
   const minor = Number.parseInt(m[2], 10);
   if (major !== 1) return false;

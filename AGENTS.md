@@ -3,7 +3,7 @@
 Reference for AI/agent operators working in this repo. Grounded in `CLAUDE.md` and current project state.
 
 ## Project Snapshot
-- MCP server that lets agents decompile, remap, search, and analyze Minecraft (1.7.10+; obfuscated through 1.21.11, unobfuscated after the 26.1 cutover). Pre-1.14.4 versions (1.7.10–1.13.2) use Forge **MCP** mappings; 1.14–1.14.3 work via yarn.
+- MCP server that lets agents decompile, remap, search, and analyze Minecraft (alpha 1.0.10+; obfuscated through 1.21.11, unobfuscated after the 26.1 cutover). Pre-1.14.4 versions: 1.7.10–1.13.2 use Forge **MCP** mappings, pre-1.7.10 (alpha 1.0.10–1.6.4) use Ornithe **feather/calamus**; 1.14–1.14.3 work via yarn.
 - Phase 1 & 2 complete (core + advanced tools); 29 integration tests green as of 2025-12-06.
 - Phase 3 complete (third-party mod analysis, 2025-12-15): mod decompilation/search/indexing tools exist (`decompile_mod_jar`, `search_mod_code`, `index_mod`, `search_mod_indexed`).
 - Stack: Node 18+/ESM-only (`"type": "module"`), TS 5.7, Java 17+ (21+ for newest MC), better-sqlite3, VineFlower decompiler, tiny-remapper.
@@ -12,6 +12,7 @@ Reference for AI/agent operators working in this repo. Grounded in `CLAUDE.md` a
 - Keep ESM intact: no CommonJS, ensure `.js` extensions on local imports after build.
 - Registry extraction must use the obfuscated **server JAR** with version-aware bundler flag; never the client JAR. Unsupported for <1.13 (no data generator).
 - Yarn remapping is two-step: official → intermediary → yarn; do not collapse into one pass.
+- Pre-1.7.10 remapping is two-step obf→calamus→feather via Ornithe (`downloaders/ornithe-downloader.ts`); pre-1.3 versions ship split `-client`/`-server` calamus artifacts — we always remap the client JAR, so the `-client` artifact is probed first. Feather builds resolve from the cached feather maven-metadata.xml (24h refresh).
 - MCP remapping (1.7.10–1.13.2) is single-step obf→MCP SRG with `ignoreFieldDesc`; the SRG `FD:` lines carry no descriptors. 1.7.10–1.12.2 build from `mcp:<v>:srg` joined.srg; 1.13.x from `mcp_config:<v>` joined.tsrg (tsrg v1: method lines are `<obf> <desc> <srg>`) converted by `tsrgToSrg`. Verified stable builds live in `MCP_STABLE_BUILD`/`MCP_CONFIG_VERSIONS` (`src/downloaders/mcp-downloader.ts`); versions without their own stable CSV alias the nearest one because MCP SRG ids are globally permanent.
 - Respect cache layout in platform app data (`jars/`, `mappings/`, `remapped/`, `decompiled/{version}/{mapping}/`, `registry/{version}/`, `resources/`, `search-index/`, `cache.db`).
 - VineFlower drops `libraries/`, `versions/`, `logs/` in CWD during runs; temporary and gitignored.
@@ -19,7 +20,7 @@ Reference for AI/agent operators working in this repo. Grounded in `CLAUDE.md` a
 ## Architecture Wayfinder (src/)
 - `services/`: `version-manager` (JARs), `mapping-service` (Yarn/Mojmap/Intermediary/MCP), `remap-service` (two-step Yarn/Mojmap; single-step MCP), `decompile-service` (VineFlower), `registry-service` (data generator on server JAR).
 - `java/`: `tiny-remapper`, `vineflower`, `mc-data-gen` (bundler vs legacy invocation), `java-process` (exec wrapper).
-- `downloaders/`: Mojang assets/mappings, Yarn mappings, MCP mappings (Forge maven → SRG+CSV → obf→MCP), Java tool JARs.
+- `downloaders/`: Mojang assets/mappings, Yarn mappings, MCP mappings (Forge maven → SRG+CSV → obf→MCP), Ornithe mappings (calamus/feather tiny v2 for pre-1.7.10), Java tool JARs.
 - `cache/`: cache manager + SQLite metadata DB.
 - `utils/paths.ts`: resolves OS-specific cache roots; `utils/mcp-mappings.ts`: SRG↔CSV join + SRG lookup.
 
@@ -46,7 +47,7 @@ Reference for AI/agent operators working in this repo. Grounded in `CLAUDE.md` a
 
 ## Quick Playbooks
 - Retrieve class source: ensure version cached → `get_minecraft_source(version, className, mapping)`; triggers download/remap/decompile if missing.
-- Extract registries: use `registry-service` with server JAR and version-aware path detection; fail fast on wrong registry names (unsupported entirely for <1.13).
+- Extract registries: use `registry-service` with server JAR and version-aware path detection; fail fast on wrong registry names (unsupported entirely for <1.13, including alpha/beta ids).
 - Add new mapping type: extend `MappingType`, add downloader, wire into `mapping-service`, add tests.
 - Add manual test for version: copy template under `__tests__/manual/vX.Y.Z`, add script `test:manual:X.Y.Z`.
 - Add an older MCP version: append its verified stable build to `MCP_STABLE_BUILD` (`src/downloaders/mcp-downloader.ts`) after HEAD-checking `mcp-<v>-srg.zip` and `mcp_stable-<build>.zip` on maven.minecraftforge.net.

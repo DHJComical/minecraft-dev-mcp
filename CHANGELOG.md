@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Minecraft pre-1.7.10 support via Ornithe (feather/calamus)** — the
+  version floor drops from 1.7.10 to **alpha 1.0.10**, covering every beta
+  (b1.0–b1.8.1) and release (1.0–1.6.4) version in between. Those eras have
+  no Mojang official mappings (1.14.4+), no Fabric yarn/intermediary (1.14+)
+  and no MCP CSV artifacts (mcp_stable starts at 1.7.10); the readable-names
+  channel is Ornithe's `calamus-intermediary` (obf → intermediary) and
+  `feather` (intermediary → named) from maven.ornithemc.net, both tiny v2.
+  Remapping is two-step (official → calamus → feather), mirroring yarn; the
+  split `-client`/`-server` calamus artifacts used before MC 1.3 are probed
+  automatically (the client JAR is always the decompile target).
+- **New mapping types**: `feather` (Ornithe human-readable names for
+  pre-1.7.10) and `calamus` (Ornithe intermediary), usable everywhere a
+  mapping type is accepted, including `find_mapping` (official ↔ feather
+  lookups bridge through calamus).
+- **Manual test suite for b1.7.3** (`npm run test:manual:b1.7.3`) covering
+  download → calamus/feather build → two-step remap → decompile → source
+  retrieval, plus the registry fail-fast for non-1.x version ids.
+
 - **MCP mappings now cover every version from 1.7.10 through 1.12.2**
   (previously only 1.12.2). The stable-build table in the MCP downloader was
   rewritten with values verified against

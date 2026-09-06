@@ -5,6 +5,10 @@ import { getCacheManager } from '../cache/cache-manager.js';
 import { getFabricMaven } from '../downloaders/fabric-maven.js';
 import { downloadMcpMappings } from '../downloaders/mcp-downloader.js';
 import { getMojangDownloader } from '../downloaders/mojang-downloader.js';
+import {
+  downloadCalamusMappings,
+  downloadFeatherMappings,
+} from '../downloaders/ornithe-downloader.js';
 import { getMappingIO } from '../java/mapping-io.js';
 import { parseTinyV2 } from '../parsers/tiny-v2.js';
 import type { MappingType } from '../types/minecraft.js';
@@ -12,7 +16,12 @@ import { MappingNotFoundError } from '../utils/errors.js';
 import { ensureDir } from '../utils/file-utils.js';
 import { logger } from '../utils/logger.js';
 import { lookupInMcpSrg } from '../utils/mcp-mappings.js';
-import { getMcpSrgPath, getMojmapTinyPath } from '../utils/paths.js';
+import {
+  getCalamusTinyPath,
+  getFeatherTinyPath,
+  getMcpSrgPath,
+  getMojmapTinyPath,
+} from '../utils/paths.js';
 import { getVersionManager } from './version-manager.js';
 
 /**
@@ -80,6 +89,14 @@ export class MappingService {
       const mcpPath = getMcpSrgPath(version);
       return existsSync(mcpPath) ? mcpPath : null;
     }
+    if (mappingType === 'calamus') {
+      const calamusPath = getCalamusTinyPath(version);
+      return existsSync(calamusPath) ? calamusPath : null;
+    }
+    if (mappingType === 'feather') {
+      const featherPath = getFeatherTinyPath(version);
+      return existsSync(featherPath) ? featherPath : null;
+    }
     return this.cache.getMappingPath(version, mappingType) ?? null;
   }
 
@@ -106,6 +123,14 @@ export class MappingService {
         // stored at `mappings/mcp-<version>.srg`; no DB row is needed because
         // `getCachedMapping` resolves the path directly.
         return await downloadMcpMappings(version);
+      }
+      case 'calamus': {
+        // Ornithe calamus-intermediary (pre-1.7.10 eras); cached tiny file.
+        return await downloadCalamusMappings(version);
+      }
+      case 'feather': {
+        // Ornithe feather (human-readable names on top of calamus).
+        return await downloadFeatherMappings(version);
       }
       default:
         throw new MappingNotFoundError(
@@ -322,7 +347,7 @@ export class MappingService {
   private getSingleFileLookup(
     source: MappingType,
     target: MappingType,
-  ): 'intermediary' | 'yarn' | 'mojmap' | 'mcp' | null {
+  ): 'intermediary' | 'yarn' | 'mojmap' | 'mcp' | 'calamus' | 'feather' | null {
     // official ↔ intermediary: use intermediary file
     if (
       (source === 'official' && target === 'intermediary') ||
@@ -355,7 +380,23 @@ export class MappingService {
       return 'mcp';
     }
 
-    // Cross-file lookup required (official↔yarn, official↔mojmap, yarn↔mojmap)
+    // official ↔ calamus: use calamus file (obfuscated → calamus intermediary)
+    if (
+      (source === 'official' && target === 'calamus') ||
+      (source === 'calamus' && target === 'official')
+    ) {
+      return 'calamus';
+    }
+
+    // calamus ↔ feather: use feather file
+    if (
+      (source === 'calamus' && target === 'feather') ||
+      (source === 'feather' && target === 'calamus')
+    ) {
+      return 'feather';
+    }
+
+    // Cross-file lookup required (official↔yarn, official↔mojmap, yarn↔mojmap, official↔feather)
     return null;
   }
 
@@ -365,12 +406,14 @@ export class MappingService {
    */
   private getNamespaceForType(
     mappingType: MappingType,
-    _fileType: 'intermediary' | 'yarn' | 'mojmap' | 'mcp',
+    _fileType: 'intermediary' | 'yarn' | 'mojmap' | 'mcp' | 'calamus' | 'feather',
   ): string {
     // Intermediary file has: official, intermediary
     // Yarn file has: intermediary, named
     // Mojmap file has: intermediary, named
     // MCP file has: source, target (obfuscated → MCP names)
+    // Calamus file has: official, intermediary
+    // Feather file has: intermediary, named
 
     if (mappingType === 'official') {
       // In the MCP file the obfuscated namespace is named 'source'.
@@ -386,8 +429,12 @@ export class MappingService {
       return 'target';
     }
 
-    // Both yarn and mojmap use 'named' namespace in their respective files
-    if (mappingType === 'yarn' || mappingType === 'mojmap') {
+    if (mappingType === 'calamus') {
+      return 'intermediary';
+    }
+
+    // yarn, mojmap and feather use 'named' namespace in their respective files
+    if (mappingType === 'yarn' || mappingType === 'mojmap' || mappingType === 'feather') {
       return 'named';
     }
 
@@ -402,7 +449,7 @@ export class MappingService {
     symbol: string,
     sourceMapping: MappingType,
     targetMapping: MappingType,
-    fileType: 'intermediary' | 'yarn' | 'mojmap' | 'mcp',
+    fileType: 'intermediary' | 'yarn' | 'mojmap' | 'mcp' | 'calamus' | 'feather',
   ): Promise<MappingLookupResult> {
     const mappingPath = await this.getMappings(version, fileType);
 
@@ -452,8 +499,19 @@ export class MappingService {
   ): Promise<MappingLookupResult> {
     logger.info(`Two-step lookup: ${sourceMapping} → intermediary → ${targetMapping}`);
 
+    // Ornithe chains (official/calamus/feather) bridge through calamus, not
+    // Fabric's intermediary — fabric files do not exist for pre-1.7.10.
+    const ornitheChain =
+      sourceMapping === 'calamus' ||
+      sourceMapping === 'feather' ||
+      targetMapping === 'calamus' ||
+      targetMapping === 'feather';
+
     // Step 1: Source → Intermediary
-    const step1File = this.getFileForMapping(sourceMapping);
+    const step1File =
+      ornitheChain && sourceMapping === 'official'
+        ? 'calamus'
+        : this.getFileForMapping(sourceMapping);
     const step1Path = await this.getMappings(version, step1File);
     const step1Data = parseTinyV2(step1Path);
 
@@ -482,7 +540,10 @@ export class MappingService {
     const step1ClassName = step1Result.className;
 
     // Step 2: Intermediary → Target
-    const step2File = this.getFileForMapping(targetMapping);
+    const step2File =
+      ornitheChain && targetMapping === 'official'
+        ? 'calamus'
+        : this.getFileForMapping(targetMapping);
     const step2Path = await this.getMappings(version, step2File);
     const step2Data = parseTinyV2(step2Path);
 
@@ -555,7 +616,9 @@ export class MappingService {
   /**
    * Get the file type that contains a mapping type
    */
-  private getFileForMapping(mappingType: MappingType): 'intermediary' | 'yarn' | 'mojmap' | 'mcp' {
+  private getFileForMapping(
+    mappingType: MappingType,
+  ): 'intermediary' | 'yarn' | 'mojmap' | 'mcp' | 'calamus' | 'feather' {
     switch (mappingType) {
       case 'official':
         return 'intermediary';
@@ -568,6 +631,12 @@ export class MappingService {
       case 'mcp':
         // MCP is a standalone obf→named file; both namespaces live in it.
         return 'mcp';
+      case 'calamus':
+        // Calamus is a standalone obf→intermediary tiny file.
+        return 'calamus';
+      case 'feather':
+        // Feather is a standalone intermediary→named tiny file.
+        return 'feather';
     }
   }
 

@@ -132,6 +132,29 @@ export function getMcpConfigZipPath(version: string): string {
 }
 
 /**
+ * Get the cached Ornithe feather build-list metadata (tiny build resolution).
+ */
+export function getFeatherMetadataCachePath(): string {
+  return join(paths.mappings(), 'ornithe-feather-metadata.xml');
+}
+
+/**
+ * Get the extracted Ornithe calamus-intermediary tiny file (obfuscated →
+ * calamus intermediary) for a version.
+ */
+export function getCalamusTinyPath(version: string): string {
+  return join(paths.mappings(), `calamus-${version}.tiny`);
+}
+
+/**
+ * Get the extracted Ornithe feather tiny file (calamus intermediary →
+ * feather named) for a version.
+ */
+export function getFeatherTinyPath(version: string): string {
+  return join(paths.mappings(), `feather-${version}.tiny`);
+}
+
+/**
  * Get the generated obfuscated → MCP SRG path (reconstructed from
  * `joined.srg` + `fields.csv`/`methods.csv`).
  */

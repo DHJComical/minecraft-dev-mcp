@@ -24,6 +24,12 @@ This is a **Model Context Protocol (MCP) server** that provides AI assistants wi
    - Yarn: Community mappings (best for mod development)
    - Mojmap: Official Mojang mappings
    - Intermediary: Fabric's stable intermediate mapping format
+   - Feather/Calamus: Ornithe mappings for pre-1.7.10 versions (alpha 1.0.10
+     through 1.6.4) — the only readable-names channel for those eras. Two-step
+     remap official → calamus → feather from `maven.ornithemc.net` tiny v2
+     artifacts (`downloaders/ornithe-downloader.ts`); pre-1.3 versions use
+     split `-client` artifacts (client JAR only). See also `find_mapping`
+     bridging through calamus.
    - MCP: Forge ModCoderPack mappings for pre-1.14.4 versions (1.7.10–1.13.2;
      1.7.10 is the oldest with artifacts on the Forge maven, and 1.13.x has no
      yarn/intermediary at all), reconstructed at build time from

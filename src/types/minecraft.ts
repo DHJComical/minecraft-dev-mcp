@@ -66,9 +66,20 @@ export interface Library {
  * - 'yarn': Fabric community human-readable names
  * - 'mojmap': Official Mojang human-readable names
  * - 'mcp': Forge/ModCoderPack human-readable names for pre-1.14.4 versions
- *   (e.g. 1.12.2), where Mojang does not publish official mappings.
+ *   (1.7.10-1.13.2), where Mojang does not publish official mappings.
+ * - 'calamus': Ornithe's intermediary for pre-1.7.10 versions (alpha 1.0.10
+ *   through 1.6.4); class names are `net.minecraft.unmapped.C_NNNNNN`.
+ * - 'feather': Ornithe community human-readable names (yarn equivalent),
+ *   built on top of calamus — the readable-names channel for pre-1.7.10.
  */
-export type MappingType = 'yarn' | 'mojmap' | 'intermediary' | 'official' | 'mcp';
+export type MappingType =
+  | 'yarn'
+  | 'mojmap'
+  | 'intermediary'
+  | 'official'
+  | 'mcp'
+  | 'calamus'
+  | 'feather';
 
 /**
  * Tiny mapping entry (simplified)
