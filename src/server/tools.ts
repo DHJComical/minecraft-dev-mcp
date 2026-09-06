@@ -159,7 +159,10 @@ const AnalyzeMixinSchema = z.object({
       'Mixin source code (Java) or path to a JAR/directory (supports WSL and Windows paths)',
     ),
   mcVersion: z.string().describe('Minecraft version to validate against'),
-  mapping: z.enum(['yarn', 'mojmap']).optional().describe('Mapping type (default: yarn)'),
+  mapping: z
+    .enum(['yarn', 'mojmap', 'mcp', 'feather'])
+    .optional()
+    .describe('Mapping type (default: yarn; mcp for 1.7.10-1.13.2, feather for pre-1.7.10)'),
 });
 
 const ValidateAccessWidenerSchema = z.object({
@@ -169,7 +172,10 @@ const ValidateAccessWidenerSchema = z.object({
       'Access widener file content or path to .accesswidener file (supports WSL and Windows paths)',
     ),
   mcVersion: z.string().describe('Minecraft version to validate against'),
-  mapping: z.enum(['yarn', 'mojmap']).optional().describe('Mapping type (default: yarn)'),
+  mapping: z
+    .enum(['yarn', 'mojmap', 'mcp', 'feather'])
+    .optional()
+    .describe('Mapping type (default: yarn; mcp for 1.7.10-1.13.2, feather for pre-1.7.10)'),
 });
 
 const ValidateAccessTransformerSchema = z.object({
@@ -177,7 +183,10 @@ const ValidateAccessTransformerSchema = z.object({
     .string()
     .describe('Access transformer .cfg content or path to file (supports WSL and Windows paths)'),
   mcVersion: z.string().describe('Minecraft version to validate against'),
-  mapping: z.enum(['yarn', 'mojmap']).optional().describe('Mapping type (default: mojmap)'),
+  mapping: z
+    .enum(['yarn', 'mojmap', 'mcp', 'feather'])
+    .optional()
+    .describe('Mapping type (default: mojmap; mcp for 1.7.10-1.13.2)'),
   extraFiles: z
     .array(z.string())
     .optional()
@@ -243,8 +252,10 @@ const DecompileModJarSchema = z.object({
       'Path to the mod JAR file to decompile (can be original or remapped, supports WSL and Windows paths)',
     ),
   mapping: z
-    .enum(['yarn', 'mojmap'])
-    .describe('Mapping type the JAR uses (yarn or mojmap). Should match how the JAR was remapped.'),
+    .enum(['yarn', 'mojmap', 'mcp', 'feather'])
+    .describe(
+      'Mapping type the JAR uses (should match how it was remapped; mcp for 1.7.10-1.13.2 Forge mods, feather for pre-1.7.10 mods)',
+    ),
   modId: z.string().optional().describe('Mod ID (auto-detected from JAR if not provided)'),
   modVersion: z
     .string()
@@ -259,14 +270,18 @@ const SearchModCodeSchema = z.object({
   searchType: z
     .enum(['class', 'method', 'field', 'content', 'all'])
     .describe('Type of search: class name, method, field, content, or all'),
-  mapping: z.enum(['yarn', 'mojmap']).describe('Mapping type used when decompiling'),
+  mapping: z
+    .enum(['yarn', 'mojmap', 'mcp', 'feather'])
+    .describe('Mapping type used when decompiling'),
   limit: z.number().optional().describe('Maximum number of results (default: 50)'),
 });
 
 const IndexModSchema = z.object({
   modId: z.string().describe('Mod ID (from decompile_mod_jar)'),
   modVersion: z.string().describe('Mod version'),
-  mapping: z.enum(['yarn', 'mojmap']).describe('Mapping type used when decompiling'),
+  mapping: z
+    .enum(['yarn', 'mojmap', 'mcp', 'feather'])
+    .describe('Mapping type used when decompiling'),
   force: z
     .boolean()
     .optional()
@@ -279,7 +294,7 @@ const SearchModIndexedSchema = z.object({
     .describe('Search query (supports FTS5 syntax: AND, OR, NOT, "phrase", prefix*)'),
   modId: z.string().describe('Mod ID'),
   modVersion: z.string().describe('Mod version'),
-  mapping: z.enum(['yarn', 'mojmap']).describe('Mapping type'),
+  mapping: z.enum(['yarn', 'mojmap', 'mcp', 'feather']).describe('Mapping type'),
   types: z
     .array(z.enum(['class', 'method', 'field']))
     .optional()
@@ -479,8 +494,9 @@ export const tools = [
         },
         mapping: {
           type: 'string',
-          enum: ['yarn', 'mojmap'],
-          description: 'Mapping type',
+          enum: ['yarn', 'mojmap', 'mcp', 'feather'],
+          description:
+            'Mapping type (yarn for 1.14-1.21.11, mojmap for 1.14.4+/26.1+, mcp for 1.7.10-1.13.2, feather for pre-1.7.10)',
         },
         limit: {
           type: 'number',
@@ -507,8 +523,9 @@ export const tools = [
         },
         mapping: {
           type: 'string',
-          enum: ['yarn', 'mojmap'],
-          description: 'Mapping type to use',
+          enum: ['yarn', 'mojmap', 'mcp', 'feather'],
+          description:
+            'Mapping type to use (yarn for 1.14-1.21.11, mojmap for 1.14.4+/26.1+, mcp for 1.7.10-1.13.2, feather for pre-1.7.10)',
         },
         category: {
           type: 'string',
@@ -537,8 +554,9 @@ export const tools = [
         },
         mapping: {
           type: 'string',
-          enum: ['yarn', 'mojmap'],
-          description: 'Mapping type (default: yarn)',
+          enum: ['yarn', 'mojmap', 'mcp', 'feather'],
+          description:
+            'Mapping type (default: yarn; mcp for 1.7.10-1.13.2, feather for pre-1.7.10)',
         },
       },
       required: ['source', 'mcVersion'],
@@ -562,8 +580,9 @@ export const tools = [
         },
         mapping: {
           type: 'string',
-          enum: ['yarn', 'mojmap'],
-          description: 'Mapping type (default: yarn)',
+          enum: ['yarn', 'mojmap', 'mcp', 'feather'],
+          description:
+            'Mapping type (default: yarn; mcp for 1.7.10-1.13.2, feather for pre-1.7.10)',
         },
       },
       required: ['content', 'mcVersion'],
@@ -586,8 +605,8 @@ export const tools = [
         },
         mapping: {
           type: 'string',
-          enum: ['yarn', 'mojmap'],
-          description: 'Mapping type (default: mojmap)',
+          enum: ['yarn', 'mojmap', 'mcp', 'feather'],
+          description: 'Mapping type (default: mojmap; mcp for 1.7.10-1.13.2)',
         },
         extraFiles: {
           type: 'array',
@@ -616,8 +635,9 @@ export const tools = [
         },
         mapping: {
           type: 'string',
-          enum: ['yarn', 'mojmap'],
-          description: 'Mapping type to use',
+          enum: ['yarn', 'mojmap', 'mcp', 'feather'],
+          description:
+            'Mapping type to use (yarn for 1.14-1.21.11, mojmap for 1.14.4+/26.1+, mcp for 1.7.10-1.13.2, feather for pre-1.7.10)',
         },
         packages: {
           type: 'array',
@@ -645,8 +665,9 @@ export const tools = [
         },
         mapping: {
           type: 'string',
-          enum: ['yarn', 'mojmap'],
-          description: 'Mapping type',
+          enum: ['yarn', 'mojmap', 'mcp', 'feather'],
+          description:
+            'Mapping type (yarn for 1.14-1.21.11, mojmap for 1.14.4+/26.1+, mcp for 1.7.10-1.13.2, feather for pre-1.7.10)',
         },
       },
       required: ['version', 'mapping'],
@@ -669,8 +690,9 @@ export const tools = [
         },
         mapping: {
           type: 'string',
-          enum: ['yarn', 'mojmap'],
-          description: 'Mapping type',
+          enum: ['yarn', 'mojmap', 'mcp', 'feather'],
+          description:
+            'Mapping type (yarn for 1.14-1.21.11, mojmap for 1.14.4+/26.1+, mcp for 1.7.10-1.13.2, feather for pre-1.7.10)',
         },
         types: {
           type: 'array',
@@ -754,8 +776,9 @@ export const tools = [
         },
         mapping: {
           type: 'string',
-          enum: ['yarn', 'mojmap'],
-          description: 'Mapping type the JAR uses (should match how it was remapped)',
+          enum: ['yarn', 'mojmap', 'mcp', 'feather'],
+          description:
+            'Mapping type the JAR uses (should match how it was remapped; mcp for 1.7.10-1.13.2 Forge mods, feather for pre-1.7.10 mods)',
         },
         modId: {
           type: 'string',
@@ -795,8 +818,9 @@ export const tools = [
         },
         mapping: {
           type: 'string',
-          enum: ['yarn', 'mojmap'],
-          description: 'Mapping type used when decompiling',
+          enum: ['yarn', 'mojmap', 'mcp', 'feather'],
+          description:
+            'Mapping type used when decompiling (mcp for 1.7.10-1.13.2 Forge mods, feather for pre-1.7.10 mods)',
         },
         limit: {
           type: 'number',
@@ -823,8 +847,9 @@ export const tools = [
         },
         mapping: {
           type: 'string',
-          enum: ['yarn', 'mojmap'],
-          description: 'Mapping type used when decompiling',
+          enum: ['yarn', 'mojmap', 'mcp', 'feather'],
+          description:
+            'Mapping type used when decompiling (mcp for 1.7.10-1.13.2 Forge mods, feather for pre-1.7.10 mods)',
         },
         force: {
           type: 'boolean',
@@ -855,8 +880,9 @@ export const tools = [
         },
         mapping: {
           type: 'string',
-          enum: ['yarn', 'mojmap'],
-          description: 'Mapping type',
+          enum: ['yarn', 'mojmap', 'mcp', 'feather'],
+          description:
+            'Mapping type (yarn for 1.14-1.21.11, mojmap for 1.14.4+/26.1+, mcp for 1.7.10-1.13.2, feather for pre-1.7.10)',
         },
         types: {
           type: 'array',

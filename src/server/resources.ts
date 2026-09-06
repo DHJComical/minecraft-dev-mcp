@@ -290,8 +290,10 @@ async function handleSourceResource(
   const decompileService = getDecompileService();
 
   // Validate mapping type
-  if (mapping !== 'yarn' && mapping !== 'mojmap' && mapping !== 'mcp') {
-    throw new Error(`Invalid mapping type: ${mapping}. Must be 'yarn', 'mojmap', or 'mcp'`);
+  if (mapping !== 'yarn' && mapping !== 'mojmap' && mapping !== 'mcp' && mapping !== 'feather') {
+    throw new Error(
+      `Invalid mapping type: ${mapping}. Must be 'yarn', 'mojmap', 'mcp', or 'feather'`,
+    );
   }
 
   const source = await decompileService.getClassSource(version, className, mapping as MappingType);
@@ -463,8 +465,10 @@ async function handleIndexResource(uri: string, version: string, mapping: string
   const searchService = getSearchIndexService();
 
   // Validate mapping type
-  if (mapping !== 'yarn' && mapping !== 'mojmap' && mapping !== 'mcp') {
-    throw new Error(`Invalid mapping type: ${mapping}. Must be 'yarn', 'mojmap', or 'mcp'`);
+  if (mapping !== 'yarn' && mapping !== 'mojmap' && mapping !== 'mcp' && mapping !== 'feather') {
+    throw new Error(
+      `Invalid mapping type: ${mapping}. Must be 'yarn', 'mojmap', 'mcp', or 'feather'`,
+    );
   }
 
   const stats = searchService.getStats(version, mapping as MappingType);
