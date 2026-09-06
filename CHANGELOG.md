@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.1] - 2026-09-06
+
+Documentation-only release: 1.6.0 shipped with the README frozen before the
+docs refresh, so the npm page showed the pre-1.7.10-era version support
+table. The published code itself is identical to 1.6.0.
+
+### Changed
+
+- **README** (`README.md`): the Version Support table now covers every era —
+  alpha 1.0.10–1.6.4 (Ornithe feather/calamus), 1.7.10–1.13.2 (Forge MCP),
+  1.14–1.21.11 (yarn/mojmap), 26.1+ (unobfuscated) — plus the explicit
+  not-supported list (1.10.1, pre-alpha), updated tested-versions list,
+  loader-aware mod remapping in the feature table, Ornithe in the credits,
+  and feather guidance in troubleshooting.
+- **docs/tools.md**: mapping enums for `get_minecraft_source`/`find_mapping`,
+  the loader-aware `remap_mod_jar` signature, and `decompile_minecraft_version`'s
+  patched-JAR `jarPath` flow.
+
 ## [1.6.0] - 2026-09-06
 
 ### Added
