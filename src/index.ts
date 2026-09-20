@@ -96,8 +96,10 @@ class MinecraftDevMCPServer {
   private createServer(): Server {
     const server = new Server(
       {
+        // Reported to MCP clients during the handshake; keep in sync with
+        // package.json (this is what a client shows as the server version).
         name: 'minecraft-dev-mcp',
-        version: '1.0.0',
+        version: '1.7.1',
       },
       {
         capabilities: {
