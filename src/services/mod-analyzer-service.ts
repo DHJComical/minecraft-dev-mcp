@@ -1,5 +1,21 @@
 import { existsSync, statSync } from 'node:fs';
 import AdmZip from 'adm-zip';
+import {
+  accessFlagNames,
+  extractMixinTargets,
+  extractModAnnotationId,
+  hasModAnnotation,
+  isCoremodClass,
+  parseClassFile,
+} from '../parsers/class-file.js';
+import {
+  type JarManifest,
+  getManifestAttribute,
+  parseJarManifest,
+  splitManifestList,
+} from '../parsers/jar-manifest.js';
+import { parseMcmodInfo } from '../parsers/mcmod-info.js';
+import { parseModsToml } from '../parsers/mods-toml.js';
 import type {
   DependencyType,
   ModAnalysisResult,
@@ -13,6 +29,59 @@ import type {
   ModPerson,
 } from '../types/minecraft.js';
 import { logger } from '../utils/logger.js';
+
+/**
+ * Mod JAR analysis.
+ *
+ * Supports every loader generation, which matters because the metadata format
+ * changed twice:
+ * - Fabric/Quilt: `fabric.mod.json` / `quilt.mod.json` (1.14+)
+ * - Forge 1.13 – 1.20.x: `META-INF/mods.toml`; NeoForge 1.20.5+: `neoforge.mods.toml`
+ * - Forge 1.6.4 – 1.12.2: `mcmod.info` (JSON)
+ *
+ * Facts the metadata files do not carry are recovered from `META-INF/MANIFEST.MF`
+ * (`MixinConfigs`, `FMLAT`, `FMLCorePlugin`, `TweakClass`, `Implementation-Version`)
+ * and from the class files themselves (`@Mod` ids, `@Mixin` targets, legacy
+ * coremod interfaces). Without those, a legacy Forge mod's declared mixin
+ * configs, access transformers and entry points are invisible, and a gradle
+ * `-dev` jar with no metadata file at all cannot be identified.
+ */
+
+/**
+ * Sentinel mod id used when no loader metadata identified the mod.
+ */
+export const UNKNOWN_MOD_ID = 'unknown';
+/** Sentinel mod version used when no loader metadata declared a version. */
+export const UNKNOWN_MOD_VERSION = '0.0.0';
+
+/**
+ * Unresolved Gradle placeholder (`${mod_id}`, `${version}`). ForgeGradle and
+ * Loom leave these in `mods.toml`/`fabric.mod.json` until `processResources`
+ * runs, so they appear in sources and dev jars. They are not real ids: treating
+ * them as detected would write a decompiled mod to a directory literally named
+ * `${mod_id}`.
+ */
+const PLACEHOLDER_PATTERN = /\$\{[^}]*\}/;
+
+/** Does a metadata value still contain an unexpanded build placeholder? */
+export function isUnresolvedPlaceholder(value: string | undefined): boolean {
+  return !!value && PLACEHOLDER_PATTERN.test(value);
+}
+
+/**
+ * Did the analysis actually identify a mod id? Callers that derive a cache path
+ * from it MUST check: `unknown` is a sentinel and `${...}` is a build
+ * placeholder, and every unidentified mod would otherwise collide in the same
+ * directory.
+ */
+export function isDetectedModId(id: string | undefined): boolean {
+  return !!id && id !== UNKNOWN_MOD_ID && !isUnresolvedPlaceholder(id);
+}
+
+/** Did the analysis actually identify a mod version? (`0.0.0` is a sentinel.) */
+export function isDetectedModVersion(version: string | undefined): boolean {
+  return !!version && version !== UNKNOWN_MOD_VERSION && !isUnresolvedPlaceholder(version);
+}
 
 /**
  * Options for mod analysis
@@ -95,7 +164,10 @@ interface QuiltModJson {
 }
 
 /**
- * Mixin config JSON structure
+ * Mixin config JSON structure. Field coverage follows the configs actually
+ * shipped by mods; legacy Mixin 0.7 builds (1.7.10/1.12.2) add `minVersion`
+ * and `compatibilityLevel`, which are surfaced so an agent can tell a config
+ * apart when it targets an older Mixin.
  */
 interface MixinConfigJson {
   required?: boolean;
@@ -109,6 +181,39 @@ interface MixinConfigJson {
   };
   refmap?: string;
   minVersion?: string;
+  plugin?: string;
+  setSourceFile?: boolean;
+  verbose?: boolean;
+}
+
+/**
+ * Metadata extracted from whichever loader-specific source the JAR provides,
+ * normalized into one shape. (Previously each parser repeated this 15-field
+ * inline type.)
+ */
+interface ParsedModMetadata {
+  id: string;
+  version: string;
+  name?: string;
+  description?: string;
+  authors: ModPerson[];
+  contributors?: ModPerson[];
+  license?: string | string[];
+  icon?: string;
+  contact?: ModContact;
+  minecraft: string;
+  loaderVersion?: string;
+  javaVersion?: number;
+  environment: ModEnvironment;
+  dependencies: ModDependency[];
+  entrypoints: ModEntrypoint[];
+  mixinConfigFiles: string[];
+  accessWidener?: string;
+  accessTransformers: string[];
+  nestedJars?: string[];
+  entrypointClasses: string[];
+  /** Human-readable notes about anything the metadata did not provide. */
+  warnings: string[];
 }
 
 /**
@@ -136,14 +241,24 @@ export class ModAnalyzerService {
     const zip = new AdmZip(jarPath);
     const entries = zip.getEntries();
 
+    const manifest = this.readManifest(zip);
+
     // Detect mod loader and parse metadata
     const loaderInfo = this.detectModLoader(zip);
-    const metadata = await this.parseMetadata(zip, loaderInfo.loader);
+    const metadata = this.parseMetadata(zip, loaderInfo.loader, manifest);
 
-    // Parse mixin configs
+    // Mixin configs: loader metadata, then the manifest, then a filename scan.
+    metadata.mixinConfigFiles = this.collectMixinConfigs(zip, metadata.mixinConfigFiles, manifest);
     const mixinConfigs = this.parseMixinConfigs(zip, metadata.mixinConfigFiles);
 
-    // Analyze classes
+    // Access transformers: manifest + mods.toml + legacy filename conventions.
+    metadata.accessTransformers = this.collectAccessTransformers(
+      zip,
+      metadata.accessTransformers,
+      manifest,
+    );
+
+    // Analyze classes (also recovers @Mod ids, coremods and mixin targets).
     const classAnalysis = await this.analyzeClasses(
       zip,
       entries,
@@ -151,6 +266,15 @@ export class ModAnalyzerService {
       mixinConfigs,
       options,
     );
+
+    // Fold bytecode discoveries into the metadata: a `@Mod` annotation is the
+    // authoritative id for Forge (and the only source for gradle `-dev` jars),
+    // and legacy coremods are only identifiable from their interfaces.
+    this.applyBytecodeFindings(metadata, classAnalysis);
+
+    // Fall back to the manifest for an id/version the metadata file did not
+    // provide, then to the sentinels.
+    this.applyManifestFallbacks(metadata, manifest);
 
     const result: ModAnalysisResult = {
       analysis: {
@@ -181,14 +305,20 @@ export class ModAnalyzerService {
       entrypoints: metadata.entrypoints,
       mixins: mixinConfigs,
       accessWidener: metadata.accessWidener,
+      accessTransformers:
+        metadata.accessTransformers.length > 0 ? metadata.accessTransformers : undefined,
       classes: classAnalysis,
       nestedJars: metadata.nestedJars,
+      warnings: metadata.warnings.length > 0 ? metadata.warnings : undefined,
     };
 
     if (options.includeRawMetadata) {
       result.rawMetadata = {
         fabricModJson: loaderInfo.fabricModJson,
         quiltModJson: loaderInfo.quiltModJson,
+        mcmodInfo: loaderInfo.mcmodInfo,
+        modsToml: loaderInfo.modsToml,
+        manifest: Object.fromEntries(manifest.main),
         mixinConfigs: this.getRawMixinConfigs(zip, metadata.mixinConfigFiles),
       };
     }
@@ -199,13 +329,28 @@ export class ModAnalyzerService {
     return result;
   }
 
+  /** Read and parse `META-INF/MANIFEST.MF` (empty manifest when absent). */
+  private readManifest(zip: AdmZip): JarManifest {
+    const entry = zip.getEntry('META-INF/MANIFEST.MF');
+    if (!entry) return { main: new Map(), sections: [] };
+    try {
+      return parseJarManifest(entry.getData().toString('utf8'));
+    } catch (e) {
+      logger.warn('Failed to parse MANIFEST.MF', e);
+      return { main: new Map(), sections: [] };
+    }
+  }
+
   /**
-   * Detect which mod loader the JAR is for
+   * Detect which mod loader the JAR is for, keeping the parsed metadata so it
+   * does not have to be read twice.
    */
   private detectModLoader(zip: AdmZip): {
     loader: ModLoader;
     fabricModJson?: FabricModJson;
     quiltModJson?: QuiltModJson;
+    mcmodInfo?: unknown;
+    modsToml?: unknown;
   } {
     // Check for Fabric (fabric.mod.json)
     const fabricEntry = zip.getEntry('fabric.mod.json');
@@ -231,21 +376,44 @@ export class ModAnalyzerService {
       }
     }
 
-    // Check for Forge/NeoForge (META-INF/mods.toml or META-INF/neoforge.mods.toml)
+    // NeoForge 1.20.5+ renamed mods.toml.
     const neoforgeEntry = zip.getEntry('META-INF/neoforge.mods.toml');
     if (neoforgeEntry) {
-      return { loader: 'neoforge' };
+      return { loader: 'neoforge', modsToml: neoforgeEntry.getData().toString('utf8') };
     }
 
+    // Forge 1.13 - 1.20.x.
     const forgeEntry = zip.getEntry('META-INF/mods.toml');
     if (forgeEntry) {
+      return { loader: 'forge', modsToml: forgeEntry.getData().toString('utf8') };
+    }
+
+    // Legacy Forge (1.6.4 - 1.12.2): mcmod.info, or the FML annotation cache
+    // written by a coremod.
+    const mcmodEntry = zip.getEntry('mcmod.info');
+    if (mcmodEntry) {
+      return { loader: 'forge', mcmodInfo: mcmodEntry.getData().toString('utf8') };
+    }
+    if (zip.getEntry('META-INF/fml_cache_annotation.json')) {
       return { loader: 'forge' };
     }
 
-    // Legacy Forge (@Mod annotation check or mcmod.info)
-    const mcmodEntry = zip.getEntry('mcmod.info');
-    if (mcmodEntry) {
-      return { loader: 'forge' };
+    // A jar with an FML coremod/tweaker manifest but no metadata file is still
+    // a Forge artifact (common for coremod libraries and `-dev` jars).
+    const manifestEntry = zip.getEntry('META-INF/MANIFEST.MF');
+    if (manifestEntry) {
+      try {
+        const manifest = parseJarManifest(manifestEntry.getData().toString('utf8'));
+        if (
+          getManifestAttribute(manifest.main, 'FMLCorePlugin') ||
+          getManifestAttribute(manifest.main, 'TweakClass') ||
+          getManifestAttribute(manifest.main, 'FMLCorePluginContainsFMLMod')
+        ) {
+          return { loader: 'forge' };
+        }
+      } catch {
+        // fall through to unknown
+      }
     }
 
     return { loader: 'unknown' };
@@ -254,30 +422,7 @@ export class ModAnalyzerService {
   /**
    * Parse mod metadata based on loader type
    */
-  private async parseMetadata(
-    zip: AdmZip,
-    loader: ModLoader,
-  ): Promise<{
-    id: string;
-    version: string;
-    name?: string;
-    description?: string;
-    authors: ModPerson[];
-    contributors?: ModPerson[];
-    license?: string | string[];
-    icon?: string;
-    contact?: ModContact;
-    minecraft: string;
-    loaderVersion?: string;
-    javaVersion?: number;
-    environment: ModEnvironment;
-    dependencies: ModDependency[];
-    entrypoints: ModEntrypoint[];
-    mixinConfigFiles: string[];
-    accessWidener?: string;
-    nestedJars?: string[];
-    entrypointClasses: string[];
-  }> {
+  private parseMetadata(zip: AdmZip, loader: ModLoader, manifest: JarManifest): ParsedModMetadata {
     switch (loader) {
       case 'fabric':
         return this.parseFabricMetadata(zip);
@@ -285,36 +430,16 @@ export class ModAnalyzerService {
         return this.parseQuiltMetadata(zip);
       case 'forge':
       case 'neoforge':
-        return this.parseForgeMetadata(zip, loader);
+        return this.parseForgeMetadata(zip, loader, manifest);
       default:
-        return this.createUnknownMetadata(zip);
+        return this.createUnknownMetadata(manifest);
     }
   }
 
   /**
    * Parse Fabric mod metadata
    */
-  private parseFabricMetadata(zip: AdmZip): {
-    id: string;
-    version: string;
-    name?: string;
-    description?: string;
-    authors: ModPerson[];
-    contributors?: ModPerson[];
-    license?: string | string[];
-    icon?: string;
-    contact?: ModContact;
-    minecraft: string;
-    loaderVersion?: string;
-    javaVersion?: number;
-    environment: ModEnvironment;
-    dependencies: ModDependency[];
-    entrypoints: ModEntrypoint[];
-    mixinConfigFiles: string[];
-    accessWidener?: string;
-    nestedJars?: string[];
-    entrypointClasses: string[];
-  } {
+  private parseFabricMetadata(zip: AdmZip): ParsedModMetadata {
     const entry = zip.getEntry('fabric.mod.json');
     if (!entry) {
       throw new Error('fabric.mod.json not found');
@@ -415,35 +540,17 @@ export class ModAnalyzerService {
       entrypoints,
       mixinConfigFiles,
       accessWidener: mod.accessWidener,
+      accessTransformers: [],
       nestedJars,
       entrypointClasses,
+      warnings: [],
     };
   }
 
   /**
    * Parse Quilt mod metadata
    */
-  private parseQuiltMetadata(zip: AdmZip): {
-    id: string;
-    version: string;
-    name?: string;
-    description?: string;
-    authors: ModPerson[];
-    contributors?: ModPerson[];
-    license?: string | string[];
-    icon?: string;
-    contact?: ModContact;
-    minecraft: string;
-    loaderVersion?: string;
-    javaVersion?: number;
-    environment: ModEnvironment;
-    dependencies: ModDependency[];
-    entrypoints: ModEntrypoint[];
-    mixinConfigFiles: string[];
-    accessWidener?: string;
-    nestedJars?: string[];
-    entrypointClasses: string[];
-  } {
+  private parseQuiltMetadata(zip: AdmZip): ParsedModMetadata {
     const entry = zip.getEntry('quilt.mod.json');
     if (!entry) {
       throw new Error('quilt.mod.json not found');
@@ -557,161 +664,267 @@ export class ModAnalyzerService {
       entrypoints,
       mixinConfigFiles,
       accessWidener: mod.access_widener,
+      accessTransformers: [],
       nestedJars: loader.jars,
       entrypointClasses,
+      warnings: [],
     };
   }
 
   /**
-   * Parse Forge/NeoForge mod metadata (simplified TOML parsing)
+   * Parse Forge/NeoForge mod metadata.
+   *
+   * Two formats, chosen by what the JAR actually contains rather than by a
+   * version guess:
+   * - `META-INF/mods.toml` / `META-INF/neoforge.mods.toml` for Forge 1.13+ and
+   *   NeoForge, and
+   * - root `mcmod.info` for Forge 1.6.4 – 1.12.2.
+   *
+   * The manifest is consulted for facts neither TOML nor JSON carries:
+   * `FMLCorePlugin` / `TweakClass` / `Main-Class` entry points, `FMLAT` access
+   * transformers and `MixinConfigs`.
    */
   private parseForgeMetadata(
     zip: AdmZip,
     loader: 'forge' | 'neoforge',
-  ): {
-    id: string;
-    version: string;
-    name?: string;
-    description?: string;
-    authors: ModPerson[];
-    contributors?: ModPerson[];
-    license?: string | string[];
-    icon?: string;
-    contact?: ModContact;
-    minecraft: string;
-    loaderVersion?: string;
-    javaVersion?: number;
-    environment: ModEnvironment;
-    dependencies: ModDependency[];
-    entrypoints: ModEntrypoint[];
-    mixinConfigFiles: string[];
-    accessWidener?: string;
-    nestedJars?: string[];
-    entrypointClasses: string[];
-  } {
+    manifest: JarManifest,
+  ): ParsedModMetadata {
+    const warnings: string[] = [];
     const tomlPath = loader === 'neoforge' ? 'META-INF/neoforge.mods.toml' : 'META-INF/mods.toml';
-    const entry = zip.getEntry(tomlPath);
 
-    let id = 'unknown';
-    let version = '0.0.0';
-    let name: string | undefined;
-    let description: string | undefined;
-    let authors: ModPerson[] = [];
-    let license: string | undefined;
-    const dependencies: ModDependency[] = [];
-    let minecraft = '*';
-    let loaderVersion: string | undefined;
+    const entrypoints: ModEntrypoint[] = [];
+    const entrypointClasses: string[] = [];
+    const accessTransformers = splitManifestList(getManifestAttribute(manifest.main, 'FMLAT'));
 
-    if (entry) {
-      const content = entry.getData().toString('utf8');
+    // --- Modern format: mods.toml ---
+    const tomlEntry = zip.getEntry(tomlPath);
+    if (tomlEntry) {
+      const toml = parseModsToml(tomlEntry.getData().toString('utf8'));
 
-      // Simple TOML parsing for key fields
-      const modIdMatch = content.match(/modId\s*=\s*"([^"]+)"/);
-      if (modIdMatch) id = modIdMatch[1];
-
-      const versionMatch = content.match(/version\s*=\s*"([^"]+)"/);
-      if (versionMatch) version = versionMatch[1];
-
-      const nameMatch = content.match(/displayName\s*=\s*"([^"]+)"/);
-      if (nameMatch) name = nameMatch[1];
-
-      const descMatch = content.match(/description\s*=\s*'''([^']+)'''/s);
-      if (descMatch) description = descMatch[1].trim();
-
-      const authorsMatch = content.match(/authors\s*=\s*"([^"]+)"/);
-      if (authorsMatch) {
-        authors = authorsMatch[1].split(',').map((a) => ({ name: a.trim() }));
+      if (toml.mods.length === 0) {
+        warnings.push(`${tomlPath} contains no [[mods]] entry`);
+      } else if (toml.mods.length > 1) {
+        warnings.push(
+          `${tomlPath} declares ${toml.mods.length} mods; reported metadata is for '${toml.mods[0].modId}' (others: ${toml.mods
+            .slice(1)
+            .map((m) => m.modId)
+            .join(', ')})`,
+        );
       }
 
-      const licenseMatch = content.match(/license\s*=\s*"([^"]+)"/);
-      if (licenseMatch) license = licenseMatch[1];
-
-      // Parse dependencies section
-      const mcVersionMatch = content.match(
-        /\[\[dependencies\.[^\]]+\]\][\s\S]*?modId\s*=\s*"minecraft"[\s\S]*?versionRange\s*=\s*"\[([^\]]+)\]"/,
-      );
-      if (mcVersionMatch) {
-        minecraft = mcVersionMatch[1];
+      const primary = toml.mods[0];
+      const dependencies: ModDependency[] = [];
+      for (const dep of toml.dependencies) {
+        dependencies.push({
+          modId: dep.modId,
+          versionRange: dep.versionRange ?? '*',
+          type: this.forgeDependencyType(dep.mandatory, dep.type),
+          mandatory: dep.mandatory && dep.type !== 'incompatible' && dep.type !== 'discouraged',
+          side: dep.side,
+        });
       }
 
-      const loaderMatch = content.match(
-        /\[\[dependencies\.[^\]]+\]\][\s\S]*?modId\s*=\s*"(forge|neoforge)"[\s\S]*?versionRange\s*=\s*"\[([^\]]+)\]"/,
-      );
-      if (loaderMatch) {
-        loaderVersion = loaderMatch[2];
+      const minecraftDep = dependencies.find((d) => d.modId === 'minecraft');
+      const loaderName = loader === 'neoforge' ? 'neoforge' : 'forge';
+      const loaderDep = dependencies.find((d) => d.modId === loaderName || d.modId === 'forge');
+
+      // `loaderVersion` is the FORGE version range (`[36,)`), not a Java
+      // requirement — falling back to it reported "javaVersion: 36".
+      const javaVersion = this.parseJavaVersion(primary?.javaVersion);
+
+      const rawId = primary?.modId;
+      const rawVersion = primary?.version;
+      if (isUnresolvedPlaceholder(rawId) || isUnresolvedPlaceholder(rawVersion)) {
+        warnings.push(
+          `${tomlPath} still contains unresolved build placeholders (e.g. ${rawId ?? rawVersion}) — this looks like a pre-\`processResources\` sources/dev JAR. Pass modId/modVersion explicitly when decompiling it.`,
+        );
       }
+
+      return {
+        id: rawId ?? UNKNOWN_MOD_ID,
+        version: rawVersion ?? UNKNOWN_MOD_VERSION,
+        name: primary?.displayName,
+        description: primary?.description,
+        authors: this.parseAuthorString(primary?.authors),
+        license: toml.license,
+        contact: toml.issueTrackerURL ? { issues: toml.issueTrackerURL } : undefined,
+        icon: primary?.logoFile,
+        minecraft: minecraftDep?.versionRange ?? '*',
+        loaderVersion: loaderDep?.versionRange ?? toml.loaderVersion,
+        javaVersion,
+        environment: '*',
+        dependencies,
+        entrypoints,
+        mixinConfigFiles: toml.mixinConfigs,
+        accessTransformers: [...accessTransformers, ...toml.accessTransformerFiles],
+        entrypointClasses,
+        warnings,
+      };
     }
 
-    // Check for mixin configs in META-INF
-    const mixinConfigFiles: string[] = [];
-    const mixinsEntry = zip.getEntry(`META-INF/${id}.mixins.json`);
-    if (mixinsEntry) {
-      mixinConfigFiles.push(`META-INF/${id}.mixins.json`);
-    }
-
-    // Also check root for common patterns
-    for (const e of zip.getEntries()) {
-      if (e.entryName.endsWith('.mixins.json') && !mixinConfigFiles.includes(e.entryName)) {
-        mixinConfigFiles.push(e.entryName);
+    // --- Legacy format: mcmod.info (Forge 1.6.4 - 1.12.2) ---
+    const mcmodEntry = zip.getEntry('mcmod.info');
+    if (mcmodEntry) {
+      const mods = parseMcmodInfo(mcmodEntry.getData().toString('utf8'));
+      if (mods.length === 0) {
+        warnings.push('mcmod.info could not be parsed (expected a JSON array of mod entries)');
+      } else if (mods.length > 1) {
+        warnings.push(
+          `mcmod.info declares ${mods.length} mods; reported metadata is for '${mods[0].modId}' (others: ${mods
+            .slice(1)
+            .map((m) => m.modId)
+            .join(', ')})`,
+        );
       }
+
+      const primary = mods[0];
+      const deps: ModDependency[] = [];
+      if (primary) {
+        const mandatory = primary.useDependencyInformation;
+        const requiredIds = new Set<string>();
+        for (const modId of primary.requiredMods) {
+          deps.push({ modId, versionRange: '*', type: 'required', mandatory });
+          requiredIds.add(modId);
+        }
+        // `dependencies`/`dependants` are load-ORDER constraints, not
+        // requirements, so they are reported as such rather than as hard deps.
+        // A mod listed in BOTH `requiredMods` and `dependencies` (very common)
+        // is already covered by the stronger entry and is not repeated.
+        for (const modId of primary.dependencies) {
+          if (requiredIds.has(modId)) continue;
+          deps.push({ modId, versionRange: '*', type: 'ordering', mandatory: false });
+        }
+        for (const modId of primary.dependants) {
+          if (requiredIds.has(modId)) continue;
+          deps.push({ modId, versionRange: '*', type: 'ordering', mandatory: false });
+        }
+        if (primary.parent && !requiredIds.has(primary.parent)) {
+          deps.push({
+            modId: primary.parent,
+            versionRange: '*',
+            type: 'required',
+            mandatory: true,
+          });
+        }
+
+        // `mcversion` is the only Minecraft compatibility signal legacy Forge
+        // metadata has; expose it as a dependency so it drives both
+        // `compatibility.minecraft` and `remap_mod_jar`'s version auto-detection.
+        const mcRange = primary.mcVersion ?? primary.acceptedMinecraftVersions;
+        if (mcRange) {
+          deps.unshift({
+            modId: 'minecraft',
+            versionRange: mcRange,
+            type: 'required',
+            mandatory: true,
+          });
+        } else {
+          warnings.push(
+            'mcmod.info declares no "mcversion"/"acceptedMinecraftVersions"; the target Minecraft version is unknown',
+          );
+        }
+      }
+
+      let environment: ModEnvironment = '*';
+      const legacy = primary as unknown as {
+        clientSideOnly?: boolean;
+        serverSideOnly?: boolean;
+      };
+      if (legacy?.clientSideOnly) environment = 'client';
+      else if (legacy?.serverSideOnly) environment = 'server';
+
+      return {
+        id: primary?.modId ?? UNKNOWN_MOD_ID,
+        version: primary?.version ?? UNKNOWN_MOD_VERSION,
+        name: primary?.name,
+        description: primary?.description,
+        authors: (primary?.authors ?? []).map((name) => ({ name })),
+        license: undefined,
+        contact: primary?.url ? { homepage: primary.url, issues: primary.updateUrl } : undefined,
+        icon: primary?.logoFile,
+        minecraft: primary?.mcVersion ?? primary?.acceptedMinecraftVersions ?? '*',
+        loaderVersion: undefined,
+        javaVersion: undefined,
+        environment,
+        dependencies: deps,
+        entrypoints,
+        mixinConfigFiles: [],
+        accessTransformers,
+        entrypointClasses,
+        warnings,
+      };
     }
 
+    // --- No metadata file: manifest-only Forge artifact ---
+    warnings.push(
+      `No ${tomlPath} or mcmod.info found — mod id/version fall back to MANIFEST.MF and @Mod bytecode detection`,
+    );
     return {
-      id,
-      version,
-      name,
-      description,
-      authors,
-      license,
-      contact: undefined,
-      minecraft,
-      loaderVersion,
-      javaVersion: undefined,
+      id: UNKNOWN_MOD_ID,
+      version: UNKNOWN_MOD_VERSION,
+      authors: [],
+      minecraft: '*',
       environment: '*',
-      dependencies,
-      entrypoints: [],
-      mixinConfigFiles,
-      accessWidener: undefined,
-      nestedJars: undefined,
-      entrypointClasses: [],
+      dependencies: [],
+      entrypoints,
+      mixinConfigFiles: [],
+      accessTransformers,
+      entrypointClasses,
+      warnings,
     };
   }
 
+  /** Map Forge `mandatory` / NeoForge `type` onto the shared dependency types. */
+  private forgeDependencyType(mandatory: boolean, neoforgeType?: string): DependencyType {
+    switch (neoforgeType) {
+      case 'incompatible':
+        return 'incompatible';
+      case 'discouraged':
+        return 'suggests';
+      case 'optional':
+        return 'optional';
+      default:
+        return mandatory ? 'required' : 'optional';
+    }
+  }
+
+  /** Parse `authors="a, b, c"` / `authors="a"` into person entries. */
+  private parseAuthorString(authors: string | undefined): ModPerson[] {
+    if (!authors) return [];
+    return authors
+      .split(',')
+      .map((name) => name.trim())
+      .filter(Boolean)
+      .map((name) => ({ name }));
+  }
+
+  /** Extract a Java major version from a Forge version range (`[17,)`). */
+  private parseJavaVersion(range: string | undefined): number | undefined {
+    if (!range) return undefined;
+    const match = range.match(/(\d+)/);
+    return match ? Number.parseInt(match[1], 10) : undefined;
+  }
+
   /**
-   * Create metadata for unknown loader type
+   * Metadata for a JAR whose loader could not be identified. The manifest still
+   * often identifies it, so those attributes are used instead of nothing.
    */
-  private createUnknownMetadata(_zip: AdmZip): {
-    id: string;
-    version: string;
-    name?: string;
-    description?: string;
-    authors: ModPerson[];
-    contributors?: ModPerson[];
-    license?: string | string[];
-    icon?: string;
-    contact?: ModContact;
-    minecraft: string;
-    loaderVersion?: string;
-    javaVersion?: number;
-    environment: ModEnvironment;
-    dependencies: ModDependency[];
-    entrypoints: ModEntrypoint[];
-    mixinConfigFiles: string[];
-    accessWidener?: string;
-    nestedJars?: string[];
-    entrypointClasses: string[];
-  } {
-    // Unknown loader - return minimal metadata
+  private createUnknownMetadata(manifest: JarManifest): ParsedModMetadata {
+    const warnings = [
+      'No recognized mod metadata (fabric.mod.json, quilt.mod.json, mods.toml, mcmod.info) — loader could not be determined',
+    ];
     return {
-      id: 'unknown',
-      version: '0.0.0',
+      id: UNKNOWN_MOD_ID,
+      version: UNKNOWN_MOD_VERSION,
       authors: [],
       minecraft: '*',
       environment: '*',
       dependencies: [],
       entrypoints: [],
       mixinConfigFiles: [],
+      accessTransformers: splitManifestList(getManifestAttribute(manifest.main, 'FMLAT')),
       entrypointClasses: [],
+      warnings,
     };
   }
 
@@ -749,6 +962,177 @@ export class ModAnalyzerService {
   }
 
   /**
+   * Union every source of mixin config names, in decreasing order of authority:
+   * loader metadata, the manifest's `MixinConfigs`, then a filename scan.
+   *
+   * The scan is last and deliberately loose because legacy mods name configs
+   * anything; the manifest is what makes `mixins.betterf1.json` (1.12.2 via
+   * MixinBooter) discoverable at all.
+   */
+  private collectMixinConfigs(zip: AdmZip, declared: string[], manifest: JarManifest): string[] {
+    const configs: string[] = [];
+    const add = (name: string | undefined): void => {
+      const trimmed = name?.trim();
+      if (trimmed && !configs.includes(trimmed)) configs.push(trimmed);
+    };
+
+    for (const name of declared) add(name);
+    for (const name of splitManifestList(getManifestAttribute(manifest.main, 'MixinConfigs'))) {
+      add(name);
+    }
+
+    // Filename scan: any `*.mixins.json` anywhere in the JAR, excluding refmaps.
+    for (const entry of zip.getEntries()) {
+      const name = entry.entryName;
+      if (!name.endsWith('.mixins.json')) continue;
+      if (name.endsWith('-refmap.json')) continue;
+      add(name);
+    }
+
+    return configs;
+  }
+
+  /**
+   * Union access transformer sources: the manifest's `FMLAT` (1.7.10–1.16),
+   * NeoForge's `[[accessTransformers]]` blocks, and the legacy filename
+   * conventions (`<modid>_at.cfg`, `accesstransformer.cfg`).
+   */
+  private collectAccessTransformers(
+    zip: AdmZip,
+    declared: string[],
+    manifest: JarManifest,
+  ): string[] {
+    const found: string[] = [];
+    const basenames = new Set<string>();
+    const add = (name: string | undefined): void => {
+      const trimmed = name?.trim();
+      if (!trimmed) return;
+      // Some legacy mods ship the same AT twice (JAR root and META-INF/). They
+      // are byte-identical, so validating both is pure noise — keep the first,
+      // which is the manifest-declared or root copy.
+      const base = trimmed.slice(trimmed.lastIndexOf('/') + 1);
+      if (basenames.has(base)) return;
+      basenames.add(base);
+      found.push(trimmed);
+    };
+
+    for (const name of declared) add(name);
+    for (const name of splitManifestList(getManifestAttribute(manifest.main, 'FMLAT'))) add(name);
+
+    for (const entry of zip.getEntries()) {
+      const name = entry.entryName;
+      // Only the JAR root and META-INF carry mod ATs; anything deeper is a
+      // shaded dependency's own file.
+      const depth = name.split('/').length;
+      const inAtRoot = depth === 1 || (depth === 2 && name.startsWith('META-INF/'));
+      if (!inAtRoot) continue;
+      const base = name.slice(name.lastIndexOf('/') + 1);
+      if (base.endsWith('_at.cfg') || base === 'accesstransformer.cfg') add(name);
+    }
+
+    return found;
+  }
+
+  /**
+   * Fold bytecode-derived facts back into the parsed metadata: `@Mod` ids,
+   * `@Mod`/coremod entry points, and a consistency check when the annotation
+   * disagrees with the metadata file.
+   */
+  private applyBytecodeFindings(
+    metadata: ParsedModMetadata,
+    classAnalysis: {
+      modAnnotations: Array<{ className: string; modId?: string; isCoremod: boolean }>;
+      entrypointClasses: string[];
+    },
+  ): void {
+    const annotedIds = new Set<string>();
+    for (const found of classAnalysis.modAnnotations) {
+      const type = found.isCoremod ? 'coremod' : 'mod';
+      this.addEntrypoint(metadata, { type, value: found.className });
+      if (found.modId) annotedIds.add(found.modId);
+    }
+
+    for (const className of classAnalysis.entrypointClasses) {
+      if (!metadata.entrypointClasses.includes(className)) {
+        metadata.entrypointClasses.push(className);
+      }
+    }
+
+    if (!isDetectedModId(metadata.id) && annotedIds.size > 0) {
+      const [first] = [...annotedIds];
+      metadata.id = first ?? UNKNOWN_MOD_ID;
+      if (annotedIds.size > 1) {
+        metadata.warnings.push(
+          `@Mod annotations declare multiple ids (${[...annotedIds].join(', ')}); using '${metadata.id}'`,
+        );
+      } else {
+        metadata.warnings.push(`Mod id recovered from the @Mod annotation: '${metadata.id}'`);
+      }
+    } else if (
+      isDetectedModId(metadata.id) &&
+      annotedIds.size > 0 &&
+      !annotedIds.has(metadata.id)
+    ) {
+      metadata.warnings.push(
+        `Mod metadata declares id '${metadata.id}' but @Mod annotations declare ${[...annotedIds]
+          .map((id) => `'${id}'`)
+          .join(', ')}`,
+      );
+    }
+  }
+
+  /** Append an entry point unless the same (type, value) pair is present. */
+  private addEntrypoint(metadata: ParsedModMetadata, entrypoint: ModEntrypoint): void {
+    const duplicate = metadata.entrypoints.some(
+      (existing) => existing.type === entrypoint.type && existing.value === entrypoint.value,
+    );
+    if (duplicate) return;
+    metadata.entrypoints.push(entrypoint);
+    if (!metadata.entrypointClasses.includes(entrypoint.value)) {
+      metadata.entrypointClasses.push(entrypoint.value);
+    }
+  }
+
+  /**
+   * Last-resort id/version from the manifest. Gradle `-dev` jars and coremod
+   * libraries routinely ship no metadata file at all but do set
+   * `Implementation-Version`.
+   */
+  private applyManifestFallbacks(metadata: ParsedModMetadata, manifest: JarManifest): void {
+    if (!isDetectedModVersion(metadata.version)) {
+      const version = getManifestAttribute(manifest.main, 'Implementation-Version');
+      if (version && version.toUpperCase() !== 'UNKNOWN') {
+        metadata.version = version;
+        metadata.warnings.push(`Mod version recovered from MANIFEST.MF: '${version}'`);
+      }
+    }
+
+    // Manifest-declared entry points. These are the only entry-point signal
+    // legacy coremods and tweakers have.
+    const corePlugin = getManifestAttribute(manifest.main, 'FMLCorePlugin');
+    if (corePlugin) {
+      this.addEntrypoint(metadata, { type: 'coremod', value: corePlugin });
+    }
+    const tweakClass = getManifestAttribute(manifest.main, 'TweakClass');
+    if (tweakClass) {
+      this.addEntrypoint(metadata, { type: 'tweaker', value: tweakClass });
+    }
+    const mainClass = getManifestAttribute(manifest.main, 'Main-Class');
+    if (mainClass) {
+      this.addEntrypoint(metadata, { type: 'main', value: mainClass });
+    }
+
+    if (!isDetectedModId(metadata.id)) {
+      const title = getManifestAttribute(manifest.main, 'Implementation-Title');
+      if (title) {
+        metadata.warnings.push(
+          `Mod id could not be determined; MANIFEST.MF Implementation-Title is '${title}'`,
+        );
+      }
+    }
+  }
+
+  /**
    * Parse mixin configuration files
    */
   private parseMixinConfigs(zip: AdmZip, configFiles: string[]): ModMixinConfig[] {
@@ -771,6 +1155,10 @@ export class ModAnalyzerService {
           mixins: config.mixins,
           clientMixins: config.client,
           serverMixins: config.server,
+          required: config.required,
+          refmap: config.refmap,
+          compatibilityLevel: config.compatibilityLevel,
+          minVersion: config.minVersion,
         });
       } catch (e) {
         logger.warn(`Failed to parse mixin config: ${configFile}`, e);
@@ -816,10 +1204,12 @@ export class ModAnalyzerService {
     mixinClasses: ModClass[];
     entrypointClasses: string[];
     allClasses?: ModClass[];
+    modAnnotations: Array<{ className: string; modId?: string; isCoremod: boolean }>;
   }> {
     const packages: Record<string, number> = {};
     const mixinClasses: ModClass[] = [];
     const allClasses: ModClass[] = [];
+    const modAnnotations: Array<{ className: string; modId?: string; isCoremod: boolean }> = [];
 
     // Get all mixin class names from configs
     const mixinClassNames = new Set<string>();
@@ -872,8 +1262,30 @@ export class ModAnalyzerService {
       if (options.analyzeBytecode !== false) {
         try {
           const data = entry.getData();
-          const bytecodeInfo = this.analyzeClassBytecode(data, className);
-          Object.assign(classInfo, bytecodeInfo);
+          const info = parseClassFile(data);
+          if (info) {
+            const modId = extractModAnnotationId(info);
+            const isCoremod = isCoremodClass(info);
+            // Only a real declaration counts as an entry point. A mixin class
+            // is NOT a mod entry point — the earlier `isMixin ||` here turned
+            // every one of Meteor's 200+ mixins into a bogus `@Mod` entry.
+            if (hasModAnnotation(info) || isCoremod) {
+              modAnnotations.push({ className, modId, isCoremod });
+            }
+            const mixinTargets = extractMixinTargets(info);
+            Object.assign(classInfo, {
+              isMixin: isMixin || mixinTargets.length > 0,
+              isInterface: info.isInterface,
+              isAbstract: info.isAbstract,
+              isEnum: info.isEnum,
+              superclass: info.superName,
+              interfaces: info.interfaces,
+              access: accessFlagNames(info.accessFlags),
+              methodCount: info.methodCount,
+              fieldCount: info.fieldCount,
+              mixinTargets: mixinTargets.length > 0 ? mixinTargets : undefined,
+            });
+          }
         } catch (e) {
           // Skip classes that can't be analyzed
           logger.debug(`Failed to analyze bytecode for ${className}: ${e}`);
@@ -889,180 +1301,16 @@ export class ModAnalyzerService {
       }
     }
 
+    // The @Mod/coremod rows are collected separately; a class can be both a
+    // coremod and a mixin, so it stays in the mixin list on its own merit.
     return {
       total,
       packages,
       mixinClasses,
       entrypointClasses,
       allClasses: options.includeAllClasses ? allClasses : undefined,
+      modAnnotations,
     };
-  }
-
-  /**
-   * Analyze class bytecode for detailed information
-   */
-  private analyzeClassBytecode(data: Buffer, className: string): Partial<ModClass> {
-    const result: Partial<ModClass> = {};
-
-    // Basic class file validation
-    if (data.length < 10) return result;
-
-    // Check magic number (0xCAFEBABE)
-    if (data.readUInt32BE(0) !== 0xcafebabe) return result;
-
-    // Read class file structure (skip minor/major version)
-    // const minorVersion = data.readUInt16BE(4);
-    // const majorVersion = data.readUInt16BE(6);
-
-    // Read constant pool count
-    const constantPoolCount = data.readUInt16BE(8);
-
-    // Parse constant pool to find annotations and class info
-    let offset = 10;
-    const constantPool: Array<{ tag: number; value?: string | number }> = [{ tag: 0 }]; // Index 0 is unused
-
-    try {
-      for (let i = 1; i < constantPoolCount; i++) {
-        const tag = data.readUInt8(offset);
-        offset++;
-
-        switch (tag) {
-          case 1: {
-            // CONSTANT_Utf8
-            const length = data.readUInt16BE(offset);
-            offset += 2;
-            const value = data.toString('utf8', offset, offset + length);
-            constantPool.push({ tag, value });
-            offset += length;
-            break;
-          }
-          case 3: // CONSTANT_Integer
-          case 4: // CONSTANT_Float
-            constantPool.push({ tag });
-            offset += 4;
-            break;
-          case 5: // CONSTANT_Long
-          case 6: // CONSTANT_Double
-            constantPool.push({ tag });
-            constantPool.push({ tag: 0 }); // Long/Double take two slots
-            i++;
-            offset += 8;
-            break;
-          case 7: // CONSTANT_Class
-          case 8: // CONSTANT_String
-            constantPool.push({ tag, value: data.readUInt16BE(offset) });
-            offset += 2;
-            break;
-          case 9: // CONSTANT_Fieldref
-          case 10: // CONSTANT_Methodref
-          case 11: // CONSTANT_InterfaceMethodref
-          case 12: // CONSTANT_NameAndType
-            constantPool.push({ tag });
-            offset += 4;
-            break;
-          case 15: // CONSTANT_MethodHandle
-            constantPool.push({ tag });
-            offset += 3;
-            break;
-          case 16: // CONSTANT_MethodType
-            constantPool.push({ tag });
-            offset += 2;
-            break;
-          case 17: // CONSTANT_Dynamic
-          case 18: // CONSTANT_InvokeDynamic
-            constantPool.push({ tag });
-            offset += 4;
-            break;
-          case 19: // CONSTANT_Module
-          case 20: // CONSTANT_Package
-            constantPool.push({ tag });
-            offset += 2;
-            break;
-          default:
-            // Unknown tag, stop parsing
-            return result;
-        }
-      }
-
-      // Read access flags
-      const accessFlags = data.readUInt16BE(offset);
-      offset += 2;
-
-      result.isInterface = (accessFlags & 0x0200) !== 0;
-      result.isAbstract = (accessFlags & 0x0400) !== 0;
-      result.isEnum = (accessFlags & 0x4000) !== 0;
-
-      // Parse access flags
-      const access: string[] = [];
-      if (accessFlags & 0x0001) access.push('public');
-      if (accessFlags & 0x0010) access.push('final');
-      if (accessFlags & 0x0020) access.push('super');
-      if (accessFlags & 0x0200) access.push('interface');
-      if (accessFlags & 0x0400) access.push('abstract');
-      if (accessFlags & 0x1000) access.push('synthetic');
-      if (accessFlags & 0x2000) access.push('annotation');
-      if (accessFlags & 0x4000) access.push('enum');
-      result.access = access;
-
-      // Skip this class and super class
-      offset += 4;
-
-      // Read interfaces count
-      const interfacesCount = data.readUInt16BE(offset);
-      offset += 2;
-
-      const interfaces: string[] = [];
-      for (let i = 0; i < interfacesCount; i++) {
-        const interfaceIndex = data.readUInt16BE(offset);
-        offset += 2;
-        const interfaceEntry = constantPool[interfaceIndex];
-        if (interfaceEntry?.tag === 7 && typeof interfaceEntry.value === 'number') {
-          const nameEntry = constantPool[interfaceEntry.value];
-          if (nameEntry?.tag === 1 && typeof nameEntry.value === 'string') {
-            interfaces.push(nameEntry.value.replace(/\//g, '.'));
-          }
-        }
-      }
-      result.interfaces = interfaces;
-
-      // Read fields count
-      const fieldsCount = data.readUInt16BE(offset);
-      offset += 2;
-      result.fieldCount = fieldsCount;
-
-      // Skip fields (simplified - just count)
-      for (let i = 0; i < fieldsCount; i++) {
-        offset += 6; // access_flags, name_index, descriptor_index
-        const attrCount = data.readUInt16BE(offset);
-        offset += 2;
-        for (let j = 0; j < attrCount; j++) {
-          offset += 2; // attribute_name_index
-          const attrLength = data.readUInt32BE(offset);
-          offset += 4 + attrLength;
-        }
-      }
-
-      // Read methods count
-      const methodsCount = data.readUInt16BE(offset);
-      result.methodCount = methodsCount;
-
-      // Check constant pool for Mixin annotation
-      for (const entry of constantPool) {
-        if (entry.tag === 1 && typeof entry.value === 'string') {
-          if (
-            entry.value === 'Lorg/spongepowered/asm/mixin/Mixin;' ||
-            entry.value.includes('org/spongepowered/asm/mixin/Mixin')
-          ) {
-            result.isMixin = true;
-          }
-        }
-      }
-    } catch (e) {
-      // Bytecode parsing failed, return partial results
-      logger.debug(`Bytecode parsing error for ${className}: ${e}`);
-    }
-
-    return result;
   }
 }
 

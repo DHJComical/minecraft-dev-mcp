@@ -106,13 +106,17 @@ minecraft-dev-cli find_mapping --symbol a --version 1.21.1 --sourceMapping offic
 ```
 
 ### `remap_mod_jar`
-Remap a mod JAR to readable names.
+Remap a mod JAR to readable names. Loader-aware and auto-detecting: Fabric/Quilt
+mods remap intermediary → yarn/mojmap/feather; Forge/NeoForge mods for
+1.7.10–1.13.2 remap SRG member names → MCP (pass `--toMapping mcp` for those).
+The loader and the Minecraft version are read from the mod metadata, including
+legacy Forge `mcmod.info` `mcversion`, so a 1.12.2 mod needs no `--mcVersion`.
 
 Parameters:
 - `inputJar`
 - `outputJar`
-- `toMapping`
-- optional: `mcVersion`
+- `toMapping` (`yarn`, `mojmap`, `feather`, or `mcp` for Forge/NeoForge mods)
+- optional: `mcVersion`, `loader`
 
 Example:
 ```bash
@@ -156,12 +160,12 @@ Parameters:
 - optional: `mapping`
 
 ### `validate_access_transformer`
-Validate a Forge/NeoForge access transformer (`.cfg`) against Minecraft source. Checks that targets exist and match signatures, and detects record canonical-constructor crashes, inner-class accessibility issues, and conflicting modifiers. Forge/NeoForge dev environments are mojmap-only.
+Validate a Forge/NeoForge access transformer (`.cfg`) against Minecraft source. Checks that targets exist and match signatures, and detects record canonical-constructor crashes, inner-class accessibility issues, and conflicting modifiers. Forge/NeoForge dev environments are mojmap-only. For legacy 1.7.10–1.13.2 AT files, pass `--mapping mcp`: their members are named by SRG id (`field_71428_T`) and are resolved to MCP names before validation, exactly as the loader does.
 
 Parameters:
 - `content`
 - `mcVersion`
-- optional: `mapping` (default `mojmap`)
+- optional: `mapping` (default `mojmap`; use `mcp` for 1.7.10-1.13.2), `extraFiles`
 
 ### `get_documentation`
 Get docs and usage hints for a class or concept.
@@ -178,7 +182,12 @@ Parameters:
 ## Mod source and mod loader source
 
 ### `analyze_mod_jar`
-Inspect a mod or loader JAR without decompiling it.
+Inspect a mod or loader JAR without decompiling it. Covers every loader era:
+Fabric/Quilt (`fabric.mod.json`), Forge 1.13–1.20.x and NeoForge (`mods.toml`),
+and legacy Forge 1.6.4–1.12.2 (`mcmod.info`). Reports mod id, version,
+Minecraft/loader compatibility, dependencies, entry points, mixin configs and
+targets, access transformer files — and a `warnings` array listing anything the
+JAR did not say (e.g. a version recovered from `MANIFEST.MF`).
 
 Parameters:
 - `jarPath`
@@ -189,12 +198,20 @@ Example:
 minecraft-dev-cli analyze_mod_jar --jarPath C:\mods\neoforge-26.1.2-universal.jar
 ```
 
+Legacy Forge mod (1.12.2):
+```bash
+minecraft-dev-cli analyze_mod_jar --jarPath C:\mods\StorageDrawers-1.12.2-5.5.3.jar
+```
+
 ### `decompile_mod_jar`
-Decompile a mod or loader JAR to readable Java source.
+Decompile a mod or loader JAR to readable Java source. The mod id and version
+are auto-detected (loader metadata → `@Mod` bytecode → `MANIFEST.MF`); if neither
+can be determined the call fails with instructions instead of caching the mod
+under a shared placeholder path.
 
 Parameters:
 - `jarPath`
-- `mapping`
+- `mapping` (`yarn`, `mojmap`, `mcp` for 1.7.10-1.13.2 Forge, `feather` for pre-1.7.10)
 - optional: `modId`, `modVersion`
 
 Example:

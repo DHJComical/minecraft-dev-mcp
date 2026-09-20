@@ -28,6 +28,7 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import { getCacheManager } from '../cache/cache-manager.js';
+import { getMcpMemberNames } from '../downloaders/mcp-downloader.js';
 import type { BytecodeClass, BytecodeMethod } from '../java/bytecode-dumper.js';
 import type {
   AccessTransformerParseError as ATParseError,
@@ -159,6 +160,21 @@ function looksLikeDescriptor(token: string): boolean {
 /** Convert an AT dotted+`$` class name to an internal JVM name (slashes). */
 function toInternalName(className: string): string {
   return className.replace(/\./g, '/');
+}
+
+/**
+ * SRG member id shape: `field_71428_T`, `func_180495_p`, `field_1234_a`.
+ *
+ * Pre-1.17 Forge artifacts name Minecraft members this way while the JAR they
+ * are applied to is MCP-named. The CSRGs' ids are globally permanent (the same
+ * id always means the same member), which is why `mcp_stable` tables from any
+ * later build can resolve them.
+ */
+const SRG_MEMBER_PATTERN = /^(?:func|field)_\d+_[A-Za-z0-9_]+$/;
+
+/** Is this member name an SRG id rather than a readable MCP name? */
+export function isSrgMemberName(name: string): boolean {
+  return SRG_MEMBER_PATTERN.test(name);
 }
 
 /** Map a decoded JVM access-flag list to the AT visibility keyword. */
@@ -591,6 +607,78 @@ export function detectAccessTransformerConflicts(
 }
 
 // ---------------------------------------------------------------------------
+// SRG member-name resolution (legacy Forge ATs)
+// ---------------------------------------------------------------------------
+
+/**
+ * Outcome of translating SRG member ids to MCP names across a set of AT entries.
+ *
+ * `entries` mirrors the input order, so a caller that passed two files
+ * concatenated can split the result back out by index.
+ */
+interface SrgMemberResolution {
+  /** Entries to validate (SRG member ids replaced by MCP names where possible). */
+  entries: AccessTransformerEntry[];
+  /** Resolved entry -> the entry exactly as the user wrote it. */
+  originalOf: Map<AccessTransformerEntry, AccessTransformerEntry>;
+  /** Every successful translation, for the file-level note. */
+  translations: Array<{ entry: AccessTransformerEntry; from: string; to: string }>;
+  /** SRG-shaped names that are absent from the mapping table. */
+  unresolvedSrgNames: Array<{ entry: AccessTransformerEntry; name: string }>;
+  /** Set when the mapping table itself could not be obtained. */
+  loadError?: string;
+}
+
+/**
+ * Translate SRG member ids to MCP names across a set of AT entries. Pure: the
+ * mapping tables are supplied by the caller, so this is unit-testable without a
+ * decompiled Minecraft tree or a network fetch.
+ *
+ * Legacy Forge artifacts (1.7.10–1.16) name Minecraft members by SRG id —
+ * `field_71428_T`, `func_180495_p` — because that is the name the member has in
+ * Forge's compiled workspace, while the remapped JAR this validator reads is
+ * MCP-named. The loader resolves these ids through the same CSRGs before
+ * applying the AT, so resolving them here matches runtime behavior exactly.
+ *
+ * `entries` is mirrored in the result in the SAME ORDER, so a caller that
+ * concatenated several files can split the result back out by index. Members
+ * that are not in the tables are kept verbatim and recorded in
+ * `unresolvedSrgNames`.
+ *
+ * @internal
+ */
+export function translateSrgMemberNames(
+  entries: AccessTransformerEntry[],
+  names: { fields: ReadonlyMap<string, string>; methods: ReadonlyMap<string, string> },
+): SrgMemberResolution {
+  const resolution: SrgMemberResolution = {
+    entries: [...entries],
+    originalOf: new Map(),
+    translations: [],
+    unresolvedSrgNames: [],
+  };
+
+  entries.forEach((entry, index) => {
+    const memberName = entry.memberName;
+    if (!memberName || !isSrgMemberName(memberName)) return;
+
+    const table = entry.memberType === 'method' ? names.methods : names.fields;
+    const mcpName = table.get(memberName);
+    if (!mcpName) {
+      resolution.unresolvedSrgNames.push({ entry, name: memberName });
+      return;
+    }
+
+    const resolved: AccessTransformerEntry = { ...entry, memberName: mcpName };
+    resolution.originalOf.set(resolved, entry);
+    resolution.translations.push({ entry: resolved, from: memberName, to: mcpName });
+    resolution.entries[index] = resolved;
+  });
+
+  return resolution;
+}
+
+// ---------------------------------------------------------------------------
 // Service
 // ---------------------------------------------------------------------------
 
@@ -762,6 +850,43 @@ export class AccessTransformerService {
   }
 
   /**
+   * Resolve SRG member ids to MCP names for `mcp`-mapped validation.
+   *
+   * Loads the SRG→MCP member-name tables and delegates the pure mapping to
+   * `translateSrgMemberNames`. Failures (offline, unknown version) degrade to
+   * verbatim validation plus a file-level warning rather than aborting the
+   * check — a validation tool must not fail because a mapping table is
+   * unavailable.
+   */
+  private async resolveSrgMemberNames(
+    entries: AccessTransformerEntry[],
+    mapping: MappingType,
+    mcVersion: string,
+  ): Promise<SrgMemberResolution> {
+    const untouched: SrgMemberResolution = {
+      entries: [...entries],
+      originalOf: new Map(),
+      translations: [],
+      unresolvedSrgNames: [],
+    };
+
+    if (mapping !== 'mcp') return untouched;
+    if (!entries.some((entry) => !!entry.memberName && isSrgMemberName(entry.memberName))) {
+      return untouched;
+    }
+
+    try {
+      return translateSrgMemberNames(entries, await getMcpMemberNames(mcVersion));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.warn(
+        `Could not load MCP member names for ${mcVersion}: ${message}. SRG-named entries are validated verbatim.`,
+      );
+      return { ...untouched, loadError: message };
+    }
+  }
+
+  /**
    * Validate an access transformer against the remapped Minecraft JAR's
    * bytecode.
    *
@@ -773,6 +898,9 @@ export class AccessTransformerService {
    * the pure per-entry validation runs against `ClassBytecodeMap`. Cross-entry
    * quirk checks (record ctor, inner-class accessibility) and duplicate/conflict
    * detection run after the per-entry pass.
+   *
+   * Under `mcp` mappings, SRG member ids are resolved to MCP names first (see
+   * `resolveSrgMemberNames`) — legacy Forge AT files are written in SRG names.
    *
    * `additionalFiles` are OTHER access transformers that ship with the same mod.
    * Their entries are not validated against bytecode here (each file is
@@ -859,13 +987,24 @@ export class AccessTransformerService {
     // All entries the loader will apply together: this file plus any sibling AT
     // files the caller passed. Cross-entry quirks must reason over the union —
     // a ctor widened in another file IS widened at runtime.
-    const allEntries = [
-      ...accessTransformer.entries,
-      ...additionalFiles.flatMap((file) => file.entries),
-    ];
+    //
+    // SRG member ids are translated to MCP names here (legacy Forge ATs name
+    // members by SRG id) BEFORE the union is used, so an SRG-named entry and an
+    // MCP-named entry targeting the same member still collide as duplicates.
+    const resolution = await this.resolveSrgMemberNames(
+      [...accessTransformer.entries, ...additionalFiles.flatMap((file) => file.entries)],
+      mapping,
+      mcVersion,
+    );
+    const resolvedOwn = resolution.entries.slice(0, accessTransformer.entries.length);
+    const allEntries = resolution.entries;
+    const originalOf = (entry: AccessTransformerEntry): AccessTransformerEntry =>
+      resolution.originalOf.get(entry) ?? entry;
 
-    // Validate each entry against bytecode.
-    for (const entry of accessTransformer.entries) {
+    // Validate each entry against bytecode, reporting against the entry as the
+    // user wrote it (the SRG name, not the MCP name we resolved internally).
+    for (const entry of resolvedOwn) {
+      const original = originalOf(entry);
       const validation = validateEntryAgainstBytecode(
         entry,
         classMap,
@@ -876,25 +1015,73 @@ export class AccessTransformerService {
       );
       errors.push(
         ...validation.errors.map((message) => ({
-          entry,
+          entry: original,
           message,
           suggestion: validation.suggestion,
         })),
       );
-      warnings.push(...validation.warnings.map((message) => ({ entry, message })));
+      warnings.push(...validation.warnings.map((message) => ({ entry: original, message })));
     }
 
     // Duplicate / conflicting target detection (must-do #5), over the union so
     // two files fighting over the same target is caught — that conflict fails
     // the Forge build just as surely as one inside a single file. Findings are
     // restricted to those involving THIS file's entries.
-    this.detectConflicts(allEntries, errors, warnings, new Set(accessTransformer.entries));
+    this.detectConflicts(allEntries, errors, warnings, new Set(resolvedOwn));
+
+    // Map conflict findings back onto the user's own entry objects.
+    for (const finding of [...errors, ...warnings]) {
+      finding.entry = originalOf(finding.entry);
+    }
+
+    this.reportSrgResolution(resolution, warnings, firstEntry);
 
     return {
       isValid: errors.length === 0,
       errors,
       warnings,
     };
+  }
+
+  /**
+   * Surface what SRG→MCP resolution did, so a passing result is still
+   * explainable and an unresolvable id is not silently reported as a plain
+   * missing member.
+   */
+  private reportSrgResolution(
+    resolution: SrgMemberResolution,
+    warnings: AccessTransformerValidation['warnings'],
+    fallbackEntry: AccessTransformerEntry,
+  ): void {
+    const originalOf = (entry: AccessTransformerEntry): AccessTransformerEntry =>
+      resolution.originalOf.get(entry) ?? entry;
+
+    if (resolution.loadError) {
+      warnings.push({
+        entry: fallbackEntry,
+        message: `Could not load the MCP member-name table for this version (${resolution.loadError}), so SRG-named entries were checked verbatim and may be reported as missing.`,
+      });
+    }
+
+    if (resolution.translations.length > 0) {
+      const sample = resolution.translations
+        .slice(0, 3)
+        .map((t) => `'${t.from}' -> '${t.to}'`)
+        .join(', ');
+      warnings.push({
+        entry: originalOf(resolution.translations[0].entry),
+        message:
+          `${resolution.translations.length} ${resolution.translations.length === 1 ? 'entry names' : 'entries name'} members by SRG id (legacy Forge style); ` +
+          `resolved to MCP names for validation, exactly as the loader does before applying the AT: ${sample}`,
+      });
+    }
+
+    for (const unresolved of resolution.unresolvedSrgNames) {
+      warnings.push({
+        entry: originalOf(unresolved.entry),
+        message: `'${unresolved.name}' looks like an SRG member id but is not in the MCP mapping table for this version; it was validated verbatim, so a "not found" below means the loader cannot resolve it either.`,
+      });
+    }
   }
 
   /**

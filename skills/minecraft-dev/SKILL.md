@@ -43,13 +43,13 @@ Use the actual Minecraft version the user is working with. Modern releases use t
 ### Validation and documentation
 - `analyze_mixin` — validate Mixin targets and injections against Minecraft source.
 - `validate_access_widener` — validate access widener targets against Minecraft source.
-- `validate_access_transformer` — validate a Forge/NeoForge access transformer (`.cfg`) against Minecraft source (mojmap-only); flags bad targets/signatures, record canonical-constructor crashes, inner-class accessibility, and conflicting modifiers.
+- `validate_access_transformer` — validate a Forge/NeoForge access transformer (`.cfg`) against Minecraft source (mojmap-only); flags bad targets/signatures, record canonical-constructor crashes, inner-class accessibility, and conflicting modifiers. For legacy 1.7.10-1.13.2 files pass `--mapping mcp`; their SRG member ids (`field_71428_T`) are resolved to MCP names before validation.
 - `get_documentation` — fetch documentation hints for a Minecraft class or concept.
 - `search_documentation` — search known Minecraft and Fabric docs.
 
 ### Mod source and mod loader source
-- `analyze_mod_jar` — inspect a mod or loader JAR for metadata, dependencies, entrypoints, mixins, and loader info.
-- `decompile_mod_jar` — decompile a mod or loader JAR into readable Java source.
+- `analyze_mod_jar` — inspect a mod or loader JAR for metadata, Minecraft compatibility, dependencies, entrypoints, mixins (with targets), access transformers, and loader info. Works for every loader era: Fabric/Quilt, Forge 1.13+/NeoForge (`mods.toml`), and legacy Forge 1.6.4-1.12.2 (`mcmod.info`); anything the JAR does not say is reported in `warnings`.
+- `decompile_mod_jar` — decompile a mod or loader JAR into readable Java source. Mod id/version auto-detect from metadata, `@Mod` bytecode and `MANIFEST.MF`; if neither can be determined it errors instead of caching under a shared placeholder path.
 - `search_mod_code` — regex search through decompiled mod or loader source.
 - `index_mod` — build a fast full-text index for decompiled mod or loader source.
 - `search_mod_indexed` — run fast indexed searches against mod or loader source.

@@ -4,8 +4,10 @@ import { MappingNotFoundError } from '../utils/errors.js';
 import { ensureDir } from '../utils/file-utils.js';
 import { logger } from '../utils/logger.js';
 import {
+  type SrgToMcpMap,
   buildJoinedMapping,
   buildSrgToMcpMapping,
+  parseMcpCsv,
   reorderSrgContent,
   tsrgToSrg,
   zipGetEntry,
@@ -223,6 +225,25 @@ async function loadMcpInputs(version: string): Promise<{
   }
 
   // 2. fields.csv / methods.csv from mcp_stable
+  const { fields, methods } = await downloadStableCsvs(version, buildKey);
+
+  return {
+    mcVersion,
+    buildKey,
+    srgContent,
+    fields,
+    methods,
+  };
+}
+
+/**
+ * Download (or reuse) the `mcp_stable` CSV files for a stable build key and
+ * return their raw text.
+ */
+async function downloadStableCsvs(
+  version: string,
+  buildKey: string,
+): Promise<{ fields: string; methods: string }> {
   const mcpStableUrl = `${MCP_MAVEN_BASE}/de/oceanlabs/mcp/mcp_stable/${buildKey}/mcp_stable-${buildKey}.zip`;
   const stableZipPath = join(paths.mappings(), `mcp_stable-${buildKey}.zip`);
   if (!existsSync(stableZipPath)) {
@@ -252,12 +273,43 @@ async function loadMcpInputs(version: string): Promise<{
   }
 
   return {
-    mcVersion,
-    buildKey,
-    srgContent,
     fields: new TextDecoder().decode(fieldsCsv),
     methods: new TextDecoder().decode(methodsCsv),
   };
+}
+
+/** SRG → MCP member-name tables for a version. */
+export interface McpMemberNames {
+  fields: SrgToMcpMap;
+  methods: SrgToMcpMap;
+}
+
+/**
+ * SRG → MCP member-name tables for a version (from the `mcp_stable` CSVs).
+ *
+ * Pre-1.17 Forge artifacts refer to Minecraft members by SRG id
+ * (`field_71428_T`, `func_180495_p`) even though the compiled code they are
+ * validated against is MCP-named: access transformer `.cfg` files, access
+ * widener-style strings and `@ObjectHolder` values all do this. Translating
+ * through these tables is what lets such a file be checked against MCP-named
+ * bytecode instead of reporting every entry as missing.
+ *
+ * Only the CSVs are fetched — the SRG mapping itself is not needed.
+ */
+export async function getMcpMemberNames(version: string): Promise<McpMemberNames> {
+  const mcVersion = resolveMcVersion(version);
+  const buildKey = MCP_CONFIG_VERSIONS[mcVersion] ?? MCP_STABLE_BUILD[mcVersion];
+  if (!buildKey) {
+    throw new MappingNotFoundError(
+      version,
+      'mcp',
+      `No MCP stable mappings known for Minecraft ${mcVersion}; ` +
+        `supported: ${Object.keys({ ...MCP_STABLE_BUILD, ...MCP_CONFIG_VERSIONS }).join(', ')}`,
+    );
+  }
+
+  const { fields, methods } = await downloadStableCsvs(version, buildKey);
+  return { fields: parseMcpCsv(fields), methods: parseMcpCsv(methods) };
 }
 
 /**

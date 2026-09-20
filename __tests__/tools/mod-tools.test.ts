@@ -1,10 +1,12 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import AdmZip from 'adm-zip';
 import { describe, expect, it } from 'vitest';
 import { getVineflower } from '../../src/java/vineflower.js';
 import {
   classifySearchHits,
+  extractConcreteVersion,
   handleAnalyzeModJar,
   handleDecompileModJar,
   handleIndexMod,
@@ -83,6 +85,22 @@ describe('MCP Tool: analyze_mod_jar', () => {
 });
 
 describe('MCP Tool: remap_mod_jar', () => {
+  it('rejects `mcp` as a target for a Fabric mod with an actionable message', async () => {
+    // `mcp` names only exist for Forge-era mods. Accepting the value silently
+    // would remap a Fabric mod's intermediary members through a nonexistent
+    // mapping; accepting it at all matters because "remap this 1.12.2 mod to
+    // MCP names" is the natural way to ask for a Forge mod.
+    const response = await handleRemapModJar({
+      inputJar: METEOR_JAR_PATH,
+      outputJar: join(dirname(METEOR_JAR_PATH), 'never-written.jar'),
+      toMapping: 'mcp',
+    });
+
+    expect(response.isError).toBe(true);
+    expect(response.content[0].text).toMatch(/only applies to Forge\/NeoForge/);
+    expect(response.content[0].text).toMatch(/detected loader: fabric/);
+  }, 120000);
+
   it('should remap mod JAR to yarn mappings with explicit version', async () => {
     const response = await handleRemapModJar({
       inputJar: METEOR_JAR_PATH,
@@ -304,6 +322,70 @@ describe('MCP Tool: search_mod_indexed', () => {
     result.results.forEach((r: { entryType: string }) => {
       expect(r.entryType).toBe('method');
     });
+  }, 30000);
+});
+
+/**
+ * Minecraft-version auto-detection for `remap_mod_jar`.
+ *
+ * Version ranges in mod metadata are wildly varied, and the previous
+ * implementation stripped `><=~^` characters — which left `[1.16.5,1.17)` and
+ * `1.21.10 || 1.21.9` intact and passed them straight into mapping lookup.
+ */
+describe('extractConcreteVersion', () => {
+  it('reads a plain version', () => {
+    expect(extractConcreteVersion('1.12.2')).toBe('1.12.2');
+  });
+
+  it('strips comparison operators', () => {
+    expect(extractConcreteVersion('>=1.21.0')).toBe('1.21.0');
+    expect(extractConcreteVersion('>=0.17.3')).toBe('0.17.3');
+  });
+
+  it('reads the lower bound of a half-open Maven range', () => {
+    // The old implementation returned "[1.16.5,1.17)" unchanged.
+    expect(extractConcreteVersion('[1.16.5,1.17)')).toBe('1.16.5');
+    expect(extractConcreteVersion('[1.12,1.13)')).toBe('1.12');
+  });
+
+  it('takes the first version of an OR list', () => {
+    expect(extractConcreteVersion('1.21.10 || 1.21.9')).toBe('1.21.10');
+  });
+
+  it('returns undefined when there is no version to read', () => {
+    expect(extractConcreteVersion('*')).toBeUndefined();
+    expect(extractConcreteVersion('')).toBeUndefined();
+    expect(extractConcreteVersion(undefined)).toBeUndefined();
+  });
+});
+
+/**
+ * `decompile_mod_jar` must refuse a mod it could not identify.
+ *
+ * Before this, an unidentified mod was decompiled into
+ * `decompiled-mods/unknown/0.0.0/<mapping>` — ONE directory shared by every
+ * such mod. The next unidentified mod hit that cache and was handed a different
+ * mod's source with no error.
+ */
+describe('MCP Tool: decompile_mod_jar without detectable metadata', () => {
+  it('fails with actionable instructions instead of using a shared placeholder', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mod-decompile-'));
+    const jarPath = join(dir, 'mystery-mod.jar');
+    const zip = new AdmZip();
+    zip.addFile('readme.txt', Buffer.from('no metadata here', 'utf8'));
+    writeFileSync(jarPath, zip.toBuffer());
+
+    try {
+      const response = await handleDecompileModJar({ jarPath, mapping: 'mcp' });
+
+      expect(response.isError).toBe(true);
+      const text = response.content[0].text;
+      expect(text).toMatch(/modId/);
+      expect(text).toMatch(/modVersion/);
+      expect(text).toMatch(/placeholder/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   }, 30000);
 });
 

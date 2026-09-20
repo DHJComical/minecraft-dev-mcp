@@ -7,7 +7,11 @@ import { ClassNotFoundError } from '../utils/errors.js';
 import { logger } from '../utils/logger.js';
 import { normalizePath } from '../utils/path-converter.js';
 import { classNameToPath, getDecompiledModPath } from '../utils/paths.js';
-import { getModAnalyzerService } from './mod-analyzer-service.js';
+import {
+  getModAnalyzerService,
+  isDetectedModId,
+  isDetectedModVersion,
+} from './mod-analyzer-service.js';
 
 /**
  * Service for decompiling mod JARs
@@ -31,7 +35,7 @@ export class ModDecompileService {
     modId?: string,
     modVersion?: string,
     onProgress?: (current: number, total: number) => void,
-  ): Promise<{ outputDir: string; modId: string; modVersion: string }> {
+  ): Promise<{ outputDir: string; modId: string; modVersion: string; warnings?: string[] }> {
     // Normalize the input path for the current platform
     const normalizedJarPath = normalizePath(jarPath);
 
@@ -42,20 +46,29 @@ export class ModDecompileService {
     // Resolve final mod ID and version (auto-detect if not provided)
     let finalModId = modId;
     let finalModVersion = modVersion;
+    let warnings: string[] | undefined;
 
     if (!finalModId || !finalModVersion) {
       logger.info('Auto-detecting mod metadata from JAR');
       const analysis = await this.modAnalyzer.analyzeMod(normalizedJarPath);
+      warnings = analysis.warnings;
 
-      if (!analysis.metadata?.id) {
+      // The analyzer reports sentinel values (`unknown` / `0.0.0`) when the JAR
+      // carries no usable metadata. Those MUST NOT become a cache path: every
+      // unidentified mod would land in the same `unknown/0.0.0/<mapping>`
+      // directory, and the next such mod would hit that cache and silently get
+      // someone else's source. Fail with instructions instead.
+      const missing: string[] = [];
+      if (!isDetectedModId(analysis.metadata?.id)) missing.push('modId');
+      if (!isDetectedModVersion(analysis.metadata?.version)) missing.push('modVersion');
+      if (missing.length > 0) {
+        const notes = analysis.warnings?.length
+          ? ` Analysis notes: ${analysis.warnings.join(' ')}`
+          : '';
         throw new Error(
-          'Could not detect mod ID from JAR. Please provide modId parameter explicitly.',
-        );
-      }
-
-      if (!analysis.metadata?.version) {
-        throw new Error(
-          'Could not detect mod version from JAR. Please provide modVersion parameter explicitly.',
+          `Could not detect ${missing.join(' and ')} from the JAR metadata (loader: ${analysis.loader}).` +
+            ` Pass ${missing.map((field) => `\`${field}\``).join(' and ')} explicitly to avoid caching this mod` +
+            ` under a shared placeholder directory.${notes}`,
         );
       }
 
@@ -71,7 +84,7 @@ export class ModDecompileService {
       logger.info(
         `Mod ${finalModId} v${finalModVersion} with ${mapping} mappings already decompiled`,
       );
-      return { outputDir, modId: finalModId, modVersion: finalModVersion };
+      return { outputDir, modId: finalModId, modVersion: finalModVersion, warnings };
     }
 
     logger.info(`Decompiling mod ${finalModId} v${finalModVersion} with ${mapping} mappings`);
@@ -112,7 +125,7 @@ export class ModDecompileService {
       this.cache.completeModJob(jobId);
       logger.info(`Mod decompilation complete: ${outputDir}`);
 
-      return { outputDir, modId: finalModId, modVersion: finalModVersion };
+      return { outputDir, modId: finalModId, modVersion: finalModVersion, warnings };
     } catch (error) {
       this.cache.failModJob(jobId, error instanceof Error ? error.message : 'Unknown error');
       throw error;

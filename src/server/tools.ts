@@ -122,7 +122,11 @@ const RemapModJarSchema = z.object({
     .describe(
       'Mod loader the JAR targets. `auto` (default) detects it from mod metadata. Forge/NeoForge mods require 1.7.10-1.13.2 (SRG->MCP member remap).',
     ),
-  toMapping: z.enum(['yarn', 'mojmap', 'feather']).describe('Target mapping type'),
+  toMapping: z
+    .enum(['yarn', 'mojmap', 'feather', 'mcp'])
+    .describe(
+      'Target mapping type. Fabric/Quilt mods remap to `yarn`/`mojmap`/`feather`. Forge/NeoForge mods always remap SRG members to MCP names, so `mcp` is accepted for them as a no-op acknowledgement.',
+    ),
 });
 
 const FindMappingSchema = z.object({
@@ -408,7 +412,7 @@ export const tools = [
   {
     name: 'remap_mod_jar',
     description:
-      'When the user wants to read a mod JAR whose code uses obfuscated or intermediary names, use this to remap it to human-readable names. Loader-aware: Fabric/Quilt mods (intermediary -> yarn/mojmap/feather) and Forge/NeoForge mods for 1.7.10-1.13.2 (SRG member names -> MCP names, loader auto-detected from mod metadata). Useful for reading mod source code. Supports both WSL (/mnt/c/...) and Windows (C:\\...) paths.',
+      'When the user wants to read a mod JAR whose code uses obfuscated, SRG, or intermediary names, use this to remap it to human-readable names. Loader-aware and auto-detecting: Fabric/Quilt mods (intermediary -> yarn/mojmap/feather) and Forge/NeoForge mods for 1.7.10-1.13.2 (SRG member names -> MCP), with the loader and Minecraft version read from the mod metadata — including legacy Forge `mcmod.info` `mcversion`, so a 1.12.2 mod needs no explicit mcVersion. Useful for reading mod source code. Supports both WSL (/mnt/c/...) and Windows (C:\\...) paths.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -433,9 +437,9 @@ export const tools = [
         },
         toMapping: {
           type: 'string',
-          enum: ['yarn', 'mojmap', 'feather'],
+          enum: ['yarn', 'mojmap', 'feather', 'mcp'],
           description:
-            'Target mapping type (Fabric-like mods only). Forge/NeoForge mods always remap to `mcp` names and ignore this.',
+            'Target mapping type (Fabric-like mods only). Forge/NeoForge mods always remap SRG member names to MCP names, so passing `mcp` for them is accepted and has no further effect.',
         },
       },
       required: ['inputJar', 'outputJar', 'toMapping'],
@@ -591,7 +595,7 @@ export const tools = [
   {
     name: 'validate_access_transformer',
     description:
-      'When the user asks whether a Forge/NeoForge access transformer .cfg file is correct or why an AT entry fails, use this to parse and validate Forge/NeoForge Access Transformer files against Minecraft source. Checks that targets exist and match signatures, detects record canonical-constructor crashes, inner-class accessibility, and conflicting modifiers. Supports both WSL (/mnt/c/...) and Windows (C:\\...) paths.',
+      'When the user asks whether a Forge/NeoForge access transformer .cfg file is correct or why an AT entry fails, use this to parse and validate Forge/NeoForge Access Transformer files against Minecraft source. Checks that targets exist and match signatures, detects record canonical-constructor crashes, inner-class accessibility, and conflicting modifiers. Legacy 1.7.10-1.13.2 AT files name members by SRG id (`field_71428_T`, `func_180495_p`) — pass `mapping: "mcp"` and those ids are resolved to MCP names before validation, exactly as the loader does. Supports both WSL (/mnt/c/...) and Windows (C:\\...) paths.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -741,7 +745,7 @@ export const tools = [
   {
     name: 'analyze_mod_jar',
     description:
-      'When the user asks what a mod JAR contains — its mod id, version, Minecraft compatibility, dependencies, entry points, mixins, or loader — use this to analyze a third-party mod JAR file to extract metadata, dependencies, entry points, mixins, and class information. Supports Fabric, Quilt, Forge, and NeoForge mods. Returns comprehensive mod analysis including: mod ID, version, Minecraft compatibility, dependencies, entry points, mixin configurations, and class statistics. Supports both WSL (/mnt/c/...) and Windows (C:\\...) paths.',
+      'When the user asks what a mod JAR contains — its mod id, version, Minecraft compatibility, dependencies, entry points, mixins, access transformers, or loader — use this to analyze a third-party mod JAR file. Supports Fabric, Quilt, Forge (including legacy 1.6.4-1.12.2 `mcmod.info` mods), and NeoForge. Facts the metadata files omit are recovered from MANIFEST.MF and bytecode (@Mod ids, coremod interfaces, @Mixin targets); anything undetermined is reported in `warnings`. Supports both WSL (/mnt/c/...) and Windows (C:\\...) paths.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -765,7 +769,7 @@ export const tools = [
   {
     name: 'decompile_mod_jar',
     description:
-      'When the user asks how a mod implements something or wants to read a mod’s actual Java source, use this to decompile a mod JAR file to readable Java source code. The JAR can be either the original mod JAR (with intermediary mappings) or a remapped JAR (from remap_mod_jar). Decompiled sources are cached in AppData/decompiled-mods/{modId}/{modVersion}/{mapping}/. Mod ID and version are auto-detected from the JAR metadata if not provided. Supports both WSL (/mnt/c/...) and Windows (C:\\...) paths.',
+      'When the user asks how a mod implements something or wants to read a mod’s actual Java source, use this to decompile a mod JAR file to readable Java source code. The JAR can be either the original mod JAR (with intermediary mappings) or a remapped JAR (from remap_mod_jar). Decompiled sources are cached in AppData/decompiled-mods/{modId}/{modVersion}/{mapping}/. Mod ID and version are auto-detected from the JAR metadata — including legacy Forge `mcmod.info`, `@Mod` bytecode and MANIFEST.MF — and if neither can be determined the tool fails with instructions rather than caching the mod under a shared placeholder path. Supports both WSL (/mnt/c/...) and Windows (C:\\...) paths.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1131,6 +1135,23 @@ export async function handleGetRegistryData(args: unknown) {
   }
 }
 
+/**
+ * Pull the first concrete Minecraft version out of a dependency version range.
+ *
+ * Ranges are wildly varied in the wild (`1.12.2`, `>=1.21.0`, `[1.16.5,1.17)`,
+ * `1.21.10 || 1.21.9`, `[1.12,1.13)`). The previous implementation stripped the
+ * characters `><=~^`, which worked for `>=1.21.0` but left `[1.16.5,1.17)` and
+ * `1.21.10 || 1.21.9` intact — neither is a Minecraft version, and both were
+ * passed straight into mapping lookup. Matching the first version-shaped token
+ * is what callers actually want: the oldest version the mod supports, which is
+ * also the one whose mappings must be used.
+ */
+export function extractConcreteVersion(versionRange: string | undefined): string | undefined {
+  if (!versionRange || versionRange === '*') return undefined;
+  const match = versionRange.match(/\d+\.\d+(?:\.\d+)?(?:-[A-Za-z0-9._-]+)?/);
+  return match?.[0];
+}
+
 // Handler for remap_mod_jar
 export async function handleRemapModJar(args: unknown) {
   const {
@@ -1156,41 +1177,78 @@ export async function handleRemapModJar(args: unknown) {
       throw new Error(`Input JAR not found: ${normalizedInputJar}`);
     }
 
+    // Analyze for both auto-detections. Legacy Forge (`mcmod.info`) only
+    // exposes its Minecraft version as `mcversion`, which the analyzer reports
+    // through `compatibility.minecraft` and a synthetic `minecraft`
+    // dependency, so a 1.12.2 mod auto-detects without an explicit mcVersion.
+    //
+    // The metadata files alone answer both questions for every loader whose
+    // metadata we understand, so the first pass skips per-class bytecode
+    // parsing; only a JAR whose metadata is silent (gradle `-dev` jars, bare
+    // coremods) pays for the full pass that recovers `@Mod` ids.
+    const autoDetectVersion = !providedMcVersion;
+    const autoDetectLoader = !providedLoader || providedLoader === 'auto';
+    let analysis: Awaited<ReturnType<typeof modAnalyzerService.analyzeMod>> | undefined;
+    if (autoDetectVersion || autoDetectLoader) {
+      const cheap = await modAnalyzerService.analyzeMod(normalizedInputJar, {
+        analyzeBytecode: false,
+      });
+      const metadataIsSilent =
+        cheap.loader === 'unknown' ||
+        !cheap.compatibility.minecraft ||
+        cheap.compatibility.minecraft === '*';
+      analysis = metadataIsSilent ? await modAnalyzerService.analyzeMod(normalizedInputJar) : cheap;
+    }
+
     // Auto-detect Minecraft version if not provided
     let mcVersion = providedMcVersion;
-    if (!mcVersion) {
+    if (!mcVersion && analysis) {
       logger.info('Minecraft version not provided, attempting auto-detection from mod metadata');
-      const analysis = await modAnalyzerService.analyzeMod(normalizedInputJar);
+      const candidate =
+        analysis.compatibility.minecraft !== '*' ? analysis.compatibility.minecraft : undefined;
+      const fromCompatibility = candidate ? extractConcreteVersion(candidate) : undefined;
+      const fromDependency = analysis.dependencies
+        .filter((dep) => dep.modId === 'minecraft')
+        .map((dep) => extractConcreteVersion(dep.versionRange))
+        .find((version): version is string => !!version);
 
-      // Find minecraft dependency
-      const minecraftDep = analysis.dependencies?.find((dep) => dep.modId === 'minecraft');
-      if (!minecraftDep || !minecraftDep.versionRange) {
+      mcVersion = fromCompatibility ?? fromDependency;
+      if (!mcVersion) {
+        const notes = analysis.warnings?.length
+          ? ` Analysis notes: ${analysis.warnings.join(' ')}`
+          : '';
         throw new Error(
-          'Could not auto-detect Minecraft version from mod metadata. Please provide mcVersion parameter explicitly.',
+          `Could not auto-detect Minecraft version from mod metadata. Please provide mcVersion parameter explicitly.${notes}`,
         );
       }
-
-      // Extract version from range (e.g., "1.21.11" from "1.21.11" or ">=1.21.0")
-      mcVersion = minecraftDep.versionRange.replace(/[><=~^]/g, '').trim();
       logger.info(`Auto-detected Minecraft version: ${mcVersion}`);
+    }
+    if (!mcVersion) {
+      throw new Error(
+        'Could not determine the Minecraft version for this mod. Provide `mcVersion` explicitly.',
+      );
     }
 
     // Resolve the mod loader: explicit param wins, else detect from metadata
     // (the version auto-detection pass above already analyzed when possible).
     let loader: ModLoader = providedLoader && providedLoader !== 'auto' ? providedLoader : 'fabric';
-    if (providedLoader === 'auto') {
-      try {
-        const detection = await modAnalyzerService.analyzeMod(normalizedInputJar);
-        if (detection.loader && detection.loader !== 'unknown') {
-          loader = detection.loader;
-        }
-      } catch (detectError) {
-        logger.warn(
-          `Loader auto-detection failed, assuming fabric: ${detectError instanceof Error ? detectError.message : String(detectError)}`,
-        );
+    if (autoDetectLoader && analysis) {
+      if (analysis.loader && analysis.loader !== 'unknown') {
+        loader = analysis.loader;
+      } else {
+        logger.warn('Loader not present in mod metadata; assuming fabric (intermediary -> named)');
       }
     }
     logger.info(`Mod loader: ${loader}`);
+
+    // `mcp` names only exist for Forge-era mods: a Fabric/Quilt mod's members
+    // are intermediary/yarn/mojmap, so remapping one "to MCP" has no meaning.
+    // Forge mods always land on MCP names, so the value is a no-op there.
+    if (toMapping === 'mcp' && loader !== 'forge' && loader !== 'neoforge') {
+      throw new Error(
+        `toMapping 'mcp' only applies to Forge/NeoForge mods (detected loader: ${loader}). Use 'yarn', 'mojmap', or 'feather' for Fabric/Quilt mods.`,
+      );
+    }
 
     const result = await remapService.remapModJar(
       normalizedInputJar,
@@ -1211,7 +1269,9 @@ export async function handleRemapModJar(args: unknown) {
               outputJar: result,
               inputJar,
               mcVersion,
+              loader,
               mapping: toMapping,
+              ...(analysis?.warnings?.length ? { warnings: analysis.warnings } : {}),
             },
             null,
             2,
@@ -2264,6 +2324,9 @@ export async function handleDecompileModJar(args: unknown) {
               mapping,
               outputDirectory: result.outputDir,
               message: `Successfully decompiled ${result.modId} v${result.modVersion} to ${result.outputDir}`,
+              // Any metadata the JAR did not carry (id recovered from @Mod, a
+              // version fallback, …) is surfaced rather than silently guessed.
+              ...(result.warnings?.length ? { warnings: result.warnings } : {}),
             },
             null,
             2,

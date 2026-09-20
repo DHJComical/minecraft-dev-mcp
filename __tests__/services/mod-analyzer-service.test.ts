@@ -1,6 +1,17 @@
-import { existsSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import AdmZip from 'adm-zip';
 import { describe, expect, it } from 'vitest';
-import { getModAnalyzerService } from '../../src/services/mod-analyzer-service.js';
+import {
+  UNKNOWN_MOD_ID,
+  UNKNOWN_MOD_VERSION,
+  getModAnalyzerService,
+  isDetectedModId,
+  isDetectedModVersion,
+  isUnresolvedPlaceholder,
+} from '../../src/services/mod-analyzer-service.js';
 import { METEOR_JAR_PATH } from '../test-constants.js';
 
 /**
@@ -11,7 +22,13 @@ import { METEOR_JAR_PATH } from '../test-constants.js';
  * - Extract metadata from fabric.mod.json
  * - Detect mixins, entry points, and dependencies
  * - Parse class structure and bytecode
+ * - Analyze LEGACY Forge mods (mcmod.info, 1.6.4-1.12.2), whose metadata the
+ *   analyzer previously could not read at all
  */
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+/** Committed fixture: stub-compiled 1.12.2-style Forge mod (see fixtures/legacy-forge-src). */
+const LEGACY_FORGE_JAR = join(__dirname, '..', 'fixtures', 'legacy-forge-1.12.2.jar');
 
 describe('ModAnalyzerService', () => {
   it('should detect Meteor Client JAR exists', () => {
@@ -190,4 +207,183 @@ describe('ModAnalyzerService', () => {
     expect(result).toBeDefined();
     expect(result.loader).toBe('fabric');
   }, 60000);
+});
+
+/**
+ * Legacy Forge support (1.6.4 - 1.12.2).
+ *
+ * These mods declare themselves in `mcmod.info` instead of `mods.toml`, and
+ * named members by SRG id. Before this was implemented every one of them
+ * analyzed as `unknown` / `0.0.0`, which also made `decompile_mod_jar` route
+ * them all into one shared cache directory.
+ */
+describe('ModAnalyzerService: legacy Forge (mcmod.info)', () => {
+  const analyzer = getModAnalyzerService();
+
+  it('uses the committed fixture JAR', () => {
+    expect(existsSync(LEGACY_FORGE_JAR)).toBe(true);
+  });
+
+  it('detects the loader and the mod identity from mcmod.info', async () => {
+    const result = await analyzer.analyzeMod(LEGACY_FORGE_JAR);
+
+    expect(result.loader).toBe('forge');
+    expect(result.metadata.id).toBe('legacymod');
+    expect(result.metadata.version).toBe('1.2.3');
+    expect(result.metadata.name).toBe('Legacy Mod');
+    expect(result.metadata.description).toBeTruthy();
+    expect(result.metadata.icon).toBe('assets/legacymod/logo.png');
+    expect(result.metadata.contact?.homepage).toBe('https://example.com/legacymod');
+  });
+
+  it('splits packed author strings', async () => {
+    const result = await analyzer.analyzeMod(LEGACY_FORGE_JAR);
+    expect(result.metadata.authors.map((a) => a.name)).toEqual(['Aaa Bbb', 'Ccc Ddd']);
+  });
+
+  it('reports the Minecraft version from mcversion', async () => {
+    const result = await analyzer.analyzeMod(LEGACY_FORGE_JAR);
+
+    expect(result.compatibility.minecraft).toBe('1.12.2');
+    // Exposed as a dependency too, which is what remap_mod_jar auto-detects from.
+    expect(result.dependencies.find((d) => d.modId === 'minecraft')?.versionRange).toBe('1.12.2');
+  });
+
+  it('reports requiredMods as required and dependencies as ordering', async () => {
+    const result = await analyzer.analyzeMod(LEGACY_FORGE_JAR);
+
+    const forge = result.dependencies.find((d) => d.modId === 'forge');
+    expect(forge).toMatchObject({ type: 'required', mandatory: true });
+
+    // Listed in BOTH requiredMods and dependencies; only the stronger entry
+    // survives, so the output does not contradict itself.
+    const chameleon = result.dependencies.filter((d) => d.modId === 'chameleon');
+    expect(chameleon).toHaveLength(1);
+    expect(chameleon[0]).toMatchObject({ type: 'required', mandatory: true });
+  });
+
+  it('recovers the @Mod entry point and the legacy coremod from bytecode', async () => {
+    const result = await analyzer.analyzeMod(LEGACY_FORGE_JAR);
+
+    expect(result.entrypoints).toContainEqual({
+      type: 'mod',
+      value: 'com.example.legacy.LegacyMod',
+    });
+    // Declared by MANIFEST.MF FMLCorePlugin + the implemented FML interface.
+    expect(result.entrypoints).toContainEqual({
+      type: 'coremod',
+      value: 'com.example.legacy.LegacyCorePlugin',
+    });
+  });
+
+  it('finds a mixin config that only MANIFEST.MF declares', async () => {
+    const result = await analyzer.analyzeMod(LEGACY_FORGE_JAR);
+
+    // The config is named `mixins.legacymod.json`, so a `*.mixins.json`
+    // filename scan alone would miss it — the manifest is what finds it.
+    expect(result.mixins.map((m) => m.configFile)).toEqual(['mixins.legacymod.json']);
+    const config = result.mixins[0];
+    expect(config?.package).toBe('com.example.legacy.mixin');
+    expect(config?.mixins).toEqual(['WorldMixin', 'AliasMixin']);
+    expect(config?.minVersion).toBe('0.7.11');
+    expect(config?.compatibilityLevel).toBe('JAVA_8');
+  });
+
+  it('finds the access transformer declared by FMLAT, without duplicating the META-INF copy', async () => {
+    const result = await analyzer.analyzeMod(LEGACY_FORGE_JAR);
+
+    expect(result.accessTransformers).toEqual(['legacymod_at.cfg']);
+  });
+
+  it('extracts mixin targets, including CLASS-retention @Mixin annotations', async () => {
+    const result = await analyzer.analyzeMod(LEGACY_FORGE_JAR);
+
+    const worldMixin = result.classes.mixinClasses.find(
+      (c) => c.className === 'com.example.legacy.mixin.WorldMixin',
+    );
+    expect(worldMixin?.mixinTargets).toEqual(['net.minecraft.world.World']);
+  });
+
+  it('does not mistake mixin classes for mod entry points', async () => {
+    const result = await analyzer.analyzeMod(LEGACY_FORGE_JAR);
+
+    const modEntrypoints = result.entrypoints.filter((e) => e.type === 'mod');
+    expect(modEntrypoints).toHaveLength(1);
+  });
+
+  it('exposes the parsed mcmod.info and manifest as raw metadata', async () => {
+    const result = await analyzer.analyzeMod(LEGACY_FORGE_JAR, { includeRawMetadata: true });
+
+    expect(result.rawMetadata?.mcmodInfo).toBeTruthy();
+    expect(result.rawMetadata?.manifest?.mixinconfigs).toBe('mixins.legacymod.json');
+  });
+});
+
+describe('ModAnalyzerService: metadata gaps are reported, not invented', () => {
+  const analyzer = getModAnalyzerService();
+
+  /** Build a throwaway JAR with the given entries. */
+  function makeJar(entries: Record<string, string>): string {
+    const dir = mkdtempSync(join(tmpdir(), 'mod-analyzer-'));
+    const jarPath = join(dir, 'mod.jar');
+    const zip = new AdmZip();
+    for (const [name, content] of Object.entries(entries)) {
+      zip.addFile(name, Buffer.from(content, 'utf8'));
+    }
+    writeFileSync(jarPath, zip.toBuffer());
+    return jarPath;
+  }
+
+  it('falls back to MANIFEST.MF Implementation-Version when no metadata file exists', async () => {
+    const jarPath = makeJar({
+      'META-INF/MANIFEST.MF': 'Manifest-Version: 1.0\nImplementation-Version: 4.5.6\n',
+    });
+    try {
+      const result = await analyzer.analyzeMod(jarPath);
+
+      expect(result.metadata.version).toBe('4.5.6');
+      expect(isDetectedModVersion(result.metadata.version)).toBe(true);
+      // The id is still unknown — and said so, rather than being guessed.
+      expect(result.metadata.id).toBe(UNKNOWN_MOD_ID);
+      expect(isDetectedModId(result.metadata.id)).toBe(false);
+      expect(result.warnings?.join(' ')).toMatch(
+        /Mod version recovered from MANIFEST\.MF: '4\.5\.6'/,
+      );
+    } finally {
+      rmSync(dirname(jarPath), { recursive: true, force: true });
+    }
+  });
+
+  it('warns when a JAR has no recognizable metadata at all', async () => {
+    const jarPath = makeJar({ 'readme.txt': 'nothing to see' });
+    try {
+      const result = await analyzer.analyzeMod(jarPath);
+
+      expect(result.loader).toBe('unknown');
+      expect(result.metadata.id).toBe(UNKNOWN_MOD_ID);
+      expect(result.metadata.version).toBe(UNKNOWN_MOD_VERSION);
+      expect(result.warnings?.join(' ')).toMatch(/No recognized mod metadata/);
+    } finally {
+      rmSync(dirname(jarPath), { recursive: true, force: true });
+    }
+  });
+
+  it('treats unresolved build placeholders as undetected', async () => {
+    // ForgeGradle/Loom leave `${mod_id}` in sources-JAR metadata; using it as a
+    // cache directory would literally create a folder named `${mod_id}`.
+    const jarPath = makeJar({
+      'META-INF/mods.toml':
+        'modLoader="javafml"\n[[mods]]\nmodId="${mod_id}"\nversion="${version}"\n',
+    });
+    try {
+      const result = await analyzer.analyzeMod(jarPath);
+
+      expect(isUnresolvedPlaceholder(result.metadata.id)).toBe(true);
+      expect(isDetectedModId(result.metadata.id)).toBe(false);
+      expect(isDetectedModVersion(result.metadata.version)).toBe(false);
+      expect(result.warnings?.join(' ')).toMatch(/unresolved build placeholders/);
+    } finally {
+      rmSync(dirname(jarPath), { recursive: true, force: true });
+    }
+  });
 });

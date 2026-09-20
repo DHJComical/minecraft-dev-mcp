@@ -6,6 +6,7 @@ Reference for AI/agent operators working in this repo. Grounded in `CLAUDE.md` a
 - MCP server that lets agents decompile, remap, search, and analyze Minecraft (alpha 1.0.10+; obfuscated through 1.21.11, unobfuscated after the 26.1 cutover). Pre-1.14.4 versions: 1.7.10–1.13.2 use Forge **MCP** mappings, pre-1.7.10 (alpha 1.0.10–1.6.4) use Ornithe **feather/calamus**; 1.14–1.14.3 work via yarn.
 - Phase 1 & 2 complete (core + advanced tools); 29 integration tests green as of 2025-12-06.
 - Phase 3 complete (third-party mod analysis, 2025-12-15): mod decompilation/search/indexing tools exist (`decompile_mod_jar`, `search_mod_code`, `index_mod`, `search_mod_indexed`). `remap_mod_jar` is loader-aware: Fabric/Quilt mods remap intermediary→named; Forge/NeoForge mods for 1.7.10–1.13.2 remap SRG members→MCP via `mcp-srg-<v>.srg` (member-only; the SRG-named vanilla JAR `mcp-srg-vanilla-<v>.jar` is built as tiny-remapper classpath).
+- Mod tools are **loader-era aware, not version-gated** (`mod-analyzer-service.ts`): Fabric/Quilt (`fabric.mod.json`), Forge 1.13–1.20.x/NeoForge (`mods.toml`/`neoforge.mods.toml`, full dependency blocks with ranges/sides), and legacy Forge 1.6.4–1.12.2 (`mcmod.info`). Gaps are backfilled from `META-INF/MANIFEST.MF` (`MixinConfigs`, `FMLAT`, `FMLCorePlugin`, `TweakClass`, `Implementation-Version`) plus dependency-free class-file parsing (`@Mod` ids, coremod interfaces, `@Mixin` targets). Parsers live in `src/parsers/` (`mcmod-info`, `mods-toml`, `jar-manifest`, `class-file`).
 - Stack: Node 18+/ESM-only (`"type": "module"`), TS 5.7, Java 17+ (21+ for newest MC), better-sqlite3, VineFlower decompiler, tiny-remapper.
 
 ## What Agents Should Prioritize
@@ -18,7 +19,8 @@ Reference for AI/agent operators working in this repo. Grounded in `CLAUDE.md` a
 - VineFlower drops `libraries/`, `versions/`, `logs/` in CWD during runs; temporary and gitignored.
 
 ## Architecture Wayfinder (src/)
-- `services/`: `version-manager` (JARs), `mapping-service` (Yarn/Mojmap/Intermediary/MCP), `remap-service` (two-step Yarn/Mojmap; single-step MCP), `decompile-service` (VineFlower), `registry-service` (data generator on server JAR).
+- `services/`: `version-manager` (JARs), `mapping-service` (Yarn/Mojmap/Intermediary/MCP), `remap-service` (two-step Yarn/Mojmap; single-step MCP), `decompile-service` (VineFlower), `registry-service` (data generator on server JAR), `mod-analyzer-service`/`mod-decompile-service` (third-party mods).
+- `parsers/`: `proguard`, `tiny-v2`, `version-manifest`, plus the mod-metadata readers `mcmod-info`, `mods-toml` (purpose-built TOML subset), `jar-manifest`, `class-file` (dependency-free `.class` reader — no JDK needed to analyze a mod).
 - `java/`: `tiny-remapper`, `vineflower`, `mc-data-gen` (bundler vs legacy invocation), `java-process` (exec wrapper).
 - `downloaders/`: Mojang assets/mappings, Yarn mappings, MCP mappings (Forge maven → SRG+CSV → obf→MCP), Ornithe mappings (calamus/feather tiny v2 for pre-1.7.10), Java tool JARs.
 - `cache/`: cache manager + SQLite metadata DB.
@@ -33,12 +35,17 @@ Reference for AI/agent operators working in this repo. Grounded in `CLAUDE.md` a
 - **Registry paths**: MC ≥1.21 writes `reports/registries.json`; <1.21 uses `generated/reports/registries.json`. Names are singular (`block`, `item`, `entity`), auto-prefixed with `minecraft:` if absent.
 - **Java invocation**: MC 1.18+ bundler needs `-DbundlerMainClass=net.minecraft.data.Main`; pre-1.18 uses `-cp` mode.
 - **MCP (pre-1.14.4) mappings**: `mcp-<version>-srg.zip` joined.srg + `mcp_stable-<build>` CSVs are joined by `utils/mcp-mappings.ts`; the generated file puts `FD:` lines first (mapping-io detectFormat workaround), so any consumer must parse it order-independently (see `lookupInMcpSrg`).
+- **Legacy mod metadata is loader-era specific**: `mcmod.info` (1.6.4–1.12.2) is the ONLY source of a legacy mod's id/version/`mcversion`; `MANIFEST.MF` is the only source of `MixinConfigs`/`FMLAT`/`FMLCorePlugin` for it. Never treat the analyzer's `unknown`/`0.0.0` sentinels or a `${...}` Gradle placeholder as an identity — `decompile_mod_jar` must fail rather than cache two mods in one directory.
+- **`@Mixin` is `RetentionPolicy.CLASS`** → it lives in `RuntimeInvisibleAnnotations`. Reading only `RuntimeVisibleAnnotations` silently yields zero mixin targets. Forge's `@Mod` is RUNTIME and lands in the visible attribute, so a `.class` reader must read both.
+- **Legacy AT files use SRG member names** (`field_71428_T`) while class names are already readable. `validate_access_transformer` with `mapping: 'mcp'` resolves ids through the `mcp_stable` CSVs (`getMcpMemberNames`) before lookup — without it every entry false-fails as "not found".
 - **Performance**: first decompile downloads/remaps (~400–500 MB/version; old versions are far smaller — the 1.7.10 client JAR is ~5 MB). Caching makes subsequent requests near-instant.
 - **Integrity**: downloads are SHA-verified; cache rebuilds on corruption; Java processes run with timeouts and memory caps.
 
 ## Testing & Commands
 - Fast suite: `npm test` (vitest, targets 1.21.10 pipeline end-to-end).
-- Manual/versioned suites: `npm run test:manual` (Yarn 1.21.10/1.20.1/1.19.4, MCP 1.12.2/1.7.10, patched), `npm run test:manual:mojmap` (+ version-specific overrides).
+- Mod-metadata suites (no Java, no network): `__tests__/parsers/` (mcmod.info, mods.toml, MANIFEST.MF, class-file) and `__tests__/services/mod-analyzer-service.test.ts` against the committed fixture `__tests__/fixtures/legacy-forge-1.12.2.jar` (rebuild with `__tests__/fixtures/legacy-forge-src/build.sh`).
+- Manual/versioned suites: `npm run test:manual` (Yarn 1.21.10/1.20.1/1.19.4, MCP 1.12.2/1.7.10, patched, legacy-mod), `npm run test:manual:mojmap` (+ version-specific overrides).
+- Legacy real-mod E2E (skips when unset): `LEGACY_MOD_JAR=/path/to/mod.jar LEGACY_MOD_MC=1.12.2 LEGACY_MOD_ID=storagedrawers npm run test:manual:legacy-mod`.
 - Dev/build: `npm run dev` (tsx watch), `npm run build`, `npm run typecheck`, `npm run lint[:fix]`.
 - Full sweep: `npm run test:all` (CI + manual).
 
@@ -50,6 +57,7 @@ Reference for AI/agent operators working in this repo. Grounded in `CLAUDE.md` a
 - Extract registries: use `registry-service` with server JAR and version-aware path detection; fail fast on wrong registry names (unsupported entirely for <1.13, including alpha/beta ids).
 - Add new mapping type: extend `MappingType`, add downloader, wire into `mapping-service`, add tests.
 - Add manual test for version: copy template under `__tests__/manual/vX.Y.Z`, add script `test:manual:X.Y.Z`.
+- Analyze a third-party mod of ANY era: `analyze_mod_jar(jarPath)` first — it reports the loader, id, version, Minecraft version and a `warnings` array naming anything it could not determine. Then `remap_mod_jar` (loader + version auto-detected) → `decompile_mod_jar` → `search_mod_code`. For legacy Forge (1.6.4–1.12.2) pass `toMapping: 'mcp'`; the metadata is `mcmod.info`, not `mods.toml`.
 - Add an older MCP version: append its verified stable build to `MCP_STABLE_BUILD` (`src/downloaders/mcp-downloader.ts`) after HEAD-checking `mcp-<v>-srg.zip` and `mcp_stable-<build>.zip` on maven.minecraftforge.net.
 
 ## Support Files & References

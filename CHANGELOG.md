@@ -5,6 +5,80 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Legacy-mod release: the mod tools were built for 1.14+ metadata (Fabric JSON,
+`mods.toml`), so anything older analyzed as `unknown` / `0.0.0` — including every
+1.12.2 Forge mod the user actually had. The mod pipeline is now loader-ERA aware,
+and legacy SRG-named access transformers validate again.
+
+### Added
+
+- **Legacy Forge metadata (`mcmod.info`, 1.6.4–1.12.2)**: `analyze_mod_jar` now
+  reads the pre-1.13 format (`src/parsers/mcmod-info.ts`), so a legacy mod
+  reports its real id, version, `mcversion`, description, authors, logo,
+  `requiredMods`, `dependencies`/`dependants` and `parent` instead of
+  `unknown` / `0.0.0` with no dependencies. Author lists packed as
+  `["A, B, C"]` are comma-split.
+- **Real `mods.toml` parsing** (`src/parsers/mods-toml.ts`, purpose-built TOML
+  subset): `[[mods]]`, `[[dependencies.<owner>]]`, `[[mixins]]` and
+  `[[accessTransformers]]` are parsed as blocks. Forge/NeoForge mods now report
+  their dependency graph (with `versionRange`, `side`, `mandatory`, and
+  NeoForge's `type`) — previously always `[]` — and `compatibility.minecraft`
+  is correct for ordinary half-open ranges like `[1.16.5,1.17)`, which the old
+  single-regex approach could not match at all.
+- **`MANIFEST.MF` backfill** (`src/parsers/jar-manifest.ts`): `MixinConfigs`
+  (legacy mods name configs anything — `mixins.betterf1.json` — so the
+  `*.mixins.json` scan alone missed them), `FMLAT` access transformers,
+  `FMLCorePlugin` / `TweakClass` / `Main-Class` entry points, and
+  `Implementation-Version` as an id/version fallback for gradle `-dev` jars.
+- **Dependency-free `.class` reader** (`src/parsers/class-file.ts`): recovers
+  `@Mod` ids (the only id source for jars with no metadata file), legacy coremod
+  interfaces (`IFMLLoadingPlugin`, `DummyModContainer`, `ITweaker`) and `@Mixin`
+  targets — including `RuntimeInvisibleAnnotations`, where Mixin's CLASS-retained
+  `@Mixin` actually lives. Mods without metadata can now be identified without a
+  JDK.
+- **`warnings` and `accessTransformers`** on `ModAnalysisResult`, plus
+  `mixinTargets` on each mixin class and Forge `minVersion`/`compatibilityLevel`/
+  `refmap`/`required` on `ModMixinConfig`. Anything the JAR does not say is now
+  reported rather than invented.
+- **Manual legacy-mod suite** (`npm run test:manual:legacy-mod`, env-driven,
+  skips when unset) and a committed legacy-Forge fixture
+  (`__tests__/fixtures/legacy-forge-1.12.2.jar`, sources +
+  `build.sh` under `fixtures/legacy-forge-src/`).
+
+### Fixed
+
+- **Legacy SRG access transformers false-failed every entry.** Pre-1.17 AT files
+  name members by SRG id (`public net.minecraft.client.Minecraft field_71428_T`)
+  while the MCP-named JAR they are checked against uses MCP names, so
+  `validate_access_transformer` reported "not found" for all of them. Under
+  `mapping: "mcp"` the ids are now resolved through the `mcp_stable` CSVs
+  (`getMcpMemberNames` → pure `translateSrgMemberNames`) exactly as the loader
+  does, while findings still quote the line the user wrote. A real 1.7.10 AT
+  file with 6 SRG entries now validates clean.
+- **`decompile_mod_jar` no longer caches unrelated mods in one directory.** An
+  unidentified mod was decompiled to `decompiled-mods/unknown/0.0.0/<mapping>`,
+  which EVERY such mod shared — so the next one hit that cache and was handed a
+  different mod's source with no error. The sentinels (and unresolved `${...}`
+  Gradle placeholders) now count as "not detected" and the call fails with
+  instructions to pass `modId`/`modVersion`.
+- **`remap_mod_jar` Minecraft-version auto-detection** now reads
+  `compatibility.minecraft` / the `minecraft` dependency and extracts the first
+  concrete version token (`extractConcreteVersion`). The previous
+  character-stripping left `[1.16.5,1.17)` and `1.21.10 || 1.21.9` intact and
+  passed them into mapping lookup. Legacy mods also auto-detect their loader and
+  version now (one cheap metadata pass, escalating to a bytecode pass only when
+  the metadata is silent).
+- **`remap_mod_jar` accepts `toMapping: "mcp"`** for Forge/NeoForge mods (it is
+  what the result actually is, so it is now a valid no-op acknowledgement
+  instead of a schema rejection), and rejects it with an actionable message for
+  Fabric/Quilt mods.
+- **Mixin classes are no longer reported as mod entry points** (an `isMixin ||`
+  in the class scan turned every one of Meteor's 200+ mixins into a bogus
+  `@Mod` entry), and duplicate access-transformer copies (root + `META-INF/`) are
+  reported once.
+
 ## [1.7.0] - 2026-09-06
 
 Agent discoverability release: teach agents when to call the server, and fix

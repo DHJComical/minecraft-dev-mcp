@@ -1,0 +1,16 @@
+[
+  {
+    "modid": "legacymod",
+    "name": "Legacy Mod",
+    "description": "A synthetic 1.12.2 Forge mod used to test legacy metadata analysis.",
+    "version": "1.2.3",
+    "mcversion": "1.12.2",
+    "credits": "",
+    "url": "https://example.com/legacymod",
+    "authorList": ["Aaa Bbb, Ccc Ddd"],
+    "logoFile": "assets/legacymod/logo.png",
+    "requiredMods": ["forge", "chameleon"],
+    "dependencies": ["chameleon"],
+    "useDependencyInformation": true
+  }
+]

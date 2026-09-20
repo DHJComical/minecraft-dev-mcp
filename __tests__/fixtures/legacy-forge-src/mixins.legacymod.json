@@ -1,0 +1,8 @@
+{
+  "required": true,
+  "minVersion": "0.7.11",
+  "package": "com.example.legacy.mixin",
+  "compatibilityLevel": "JAVA_8",
+  "refmap": "mixins.legacymod.refmap.json",
+  "mixins": ["WorldMixin", "AliasMixin"]
+}

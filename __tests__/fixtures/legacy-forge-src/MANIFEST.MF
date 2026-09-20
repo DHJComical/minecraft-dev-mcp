@@ -1,0 +1,7 @@
+Manifest-Version: 1.0
+Implementation-Title: LegacyMod
+Implementation-Version: 1.2.3
+FMLCorePlugin: com.example.legacy.LegacyCorePlugin
+FMLCorePluginContainsFMLMod: true
+FMLAT: legacymod_at.cfg
+MixinConfigs: mixins.legacymod.json

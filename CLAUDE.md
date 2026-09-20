@@ -10,6 +10,7 @@ This is a **Model Context Protocol (MCP) server** that provides AI assistants wi
 
 - **Phase 1 & 2 complete** (core services, remap/decompile/search/compare) as of 2025-12-06; 29 integration tests pass end-to-end.
 - **Phase 3 complete** (third-party mod analysis) as of 2025-12-15; includes full mod decompilation, search, and indexing capabilities with WSL support.
+- **Mod tools are loader-era aware, not version-gated** (2025-12-16): `analyze_mod_jar` handles legacy Forge 1.6.4–1.12.2 (`mcmod.info`), Forge 1.13–1.20.x/NeoForge (`mods.toml` with dependency blocks), and Fabric/Quilt, backfilling from `MANIFEST.MF` and bytecode; legacy SRG-named access transformers validate under `mapping: 'mcp'`. 669 tests green (`npm test`).
 
 ## Architecture
 
@@ -208,6 +209,75 @@ VineFlower creates these folders in the **current working directory** during dec
 
 **These are temporary and gitignored** - but the actual decompiled sources go to AppData.
 
+### Mod Metadata Is Loader-Era Specific (`src/parsers/`, `mod-analyzer-service.ts`)
+
+The metadata format changed twice, so the analyzer dispatches on what the JAR
+actually contains — never on a version guess:
+
+| Era | File | Read by |
+| --- | --- | --- |
+| Fabric/Quilt | `fabric.mod.json` / `quilt.mod.json` | `parseFabricMetadata` / `parseQuiltMetadata` |
+| Forge 1.13–1.20.x / NeoForge | `META-INF/mods.toml` / `neoforge.mods.toml` | `parsers/mods-toml.ts` (purpose-built TOML subset: `[[mods]]`, `[[dependencies.<owner>]]`, `[[mixins]]`, `[[accessTransformers]]`) |
+| Forge 1.6.4–1.12.2 | root `mcmod.info` (JSON) | `parsers/mcmod-info.ts` |
+
+Three things are ALWAYS backfilled, because no metadata file carries them:
+
+1. **`META-INF/MANIFEST.MF`** (`parsers/jar-manifest.ts`): `MixinConfigs` (legacy
+   mods name configs anything — `mixins.betterf1.json` — so a `*.mixins.json`
+   scan is not enough), `FMLAT` (access transformers), `FMLCorePlugin` /
+   `TweakClass` / `Main-Class` (legacy coremod/tweaker entry points), and
+   `Implementation-Version` (id/version fallback for gradle `-dev` jars).
+2. **Class files** (`parsers/class-file.ts`, dependency-free): `@Mod` ids,
+   legacy coremod interfaces (`IFMLLoadingPlugin`, `DummyModContainer`,
+   `ITweaker`), and `@Mixin` targets. `@Mixin` is `RetentionPolicy.CLASS` and
+   therefore lives in **`RuntimeInvisibleAnnotations`** — reading only the
+   visible attribute yields zero targets; Forge's `@Mod` is RUNTIME, so both
+   attributes must be parsed.
+3. **A `warnings` array on the result**: anything not determined is *reported*,
+   never invented. `isDetectedModId` / `isDetectedModVersion` treat the
+   `unknown` / `0.0.0` sentinels AND unresolved `${...}` Gradle placeholders as
+   "not detected"; `decompile_mod_jar` then fails with instructions instead of
+   caching the mod at `decompiled-mods/unknown/0.0.0/<mapping>` (a directory
+   every unidentified mod would share, handing one mod's source to another).
+
+Legacy Forge quirks encoded in `parseForgeMetadata`: `mcversion` becomes a
+synthetic `minecraft` dependency (this is what makes `remap_mod_jar` version
+auto-detection work for 1.12.2 mods), `requiredMods` are `required` while
+`dependencies`/`dependants` are load-ORDER constraints (`type: 'ordering'`), and
+`authorList: ["A, B, C"]` is comma-split.
+
+### Legacy Access Transformers Use SRG Member Names
+
+Pre-1.17 Forge AT files name members by SRG id with already-readable class
+names:
+
+```
+public net.minecraft.client.Minecraft field_71428_T
+```
+
+The remapped JAR this validator reads under `mapping: 'mcp'` is MCP-named, so
+without translation every entry reported "not found". `AccessTransformerService`
+now resolves ids through the `mcp_stable` CSVs (`getMcpMemberNames`, from
+`downloaders/mcp-downloader.ts`) before lookup — the same resolution the loader
+performs — while still reporting findings against the line the user wrote
+(`translateSrgMemberNames` is a pure, exported seam). SRG ids are globally
+permanent, which is why a later build's CSV resolves an earlier version's ids.
+
+Only MEMBER names are translated, which is sufficient because of how the two
+eras differ in what SRG names look like:
+
+- **1.7.10–1.12.2**: the official JAR obfuscates members only, so a class name is
+  identical in SRG and MCP space (`net.minecraft.client.Minecraft`) and both the
+  AT's class names and its method descriptors already match the MCP-named JAR.
+- **1.13.x**: the official JAR also obfuscates class names (`a` →
+  `net/minecraft/util/text/TextFormatting`), but mod ATs are authored in the
+  MCP-named dev workspace, so they carry READABLE class names with SRG member
+  ids — again exactly what the member-only translation expects.
+
+Known limitation (deliberately not guessed at): an AT written against
+obfuscated 1.13.x class names would not resolve, because translating those would
+require inverting the `mcp_config` class map rather than the CSVs.
+
 ## Testing
 
 ### Integration Tests (`__tests__/integration.test.ts`)
@@ -249,6 +319,25 @@ PATCHED_VERSION=1.21.1-neoforge-21.1.72 \
 PATCHED_MC_VERSION=1.21.1 \
 PATCHED_LOADER=neoforge \
 npm run test:manual:patched
+```
+
+### Mod-Metadata Suites (no Java, no network)
+
+- `__tests__/parsers/legacy-metadata.test.ts` — `mcmod.info`, `mods.toml` (dependency blocks, half-open ranges, NeoForge `type`), `MANIFEST.MF` (folding, sections, case-insensitivity).
+- `__tests__/parsers/class-file.test.ts` — the dependency-free `.class` reader against the committed fixture `__tests__/fixtures/legacy-forge-1.12.2.jar` (rebuild: `__tests__/fixtures/legacy-forge-src/build.sh`). Pins the CLASS-retention `@Mixin` case and descriptor decoding.
+- `__tests__/services/mod-analyzer-service.test.ts` — Fabric (Meteor) plus the legacy fixture end to end, including the "warnings instead of invented values" behavior.
+- `__tests__/services/access-transformer-srg.test.ts` — `translateSrgMemberNames` and its effect on `validateEntryAgainstBytecode` (includes the pre-fix failing case).
+
+### Legacy-Mod Suite (`__tests__/manual/legacy-mod/`)
+
+Env-driven E2E suite for a REAL pre-1.14 Forge mod: analyze (`mcmod.info`) → remap (loader + version auto-detected, SRG → MCP) → decompile → validate an SRG-named AT. Skips cleanly when `LEGACY_MOD_JAR` is unset.
+
+```bash
+LEGACY_MOD_JAR=/mods/StorageDrawers-1.12.2-5.5.3.jar \
+LEGACY_MOD_MC=1.12.2 \
+LEGACY_MOD_ID=storagedrawers \
+LEGACY_MOD_AT=/mods/legacymod_at.cfg \
+npm run test:manual:legacy-mod
 ```
 
 ## Common Tasks
@@ -347,13 +436,13 @@ Deterministic central-directory scan: any `.class` entry → decompile via VineF
 4. **`get_registry_data`** - Get registry data (blocks, items, entities)
 
 ### Phase 2 Tools (Advanced Analysis)
-5. **`remap_mod_jar`** - Remap Fabric mod JARs to human-readable names
+5. **`remap_mod_jar`** - Loader-aware mod JAR remapping. Fabric/Quilt mods remap intermediary → `yarn`/`mojmap`/`feather`; Forge/NeoForge mods for 1.7.10–1.13.2 remap SRG member names → MCP (`toMapping: 'mcp'` is accepted for them as a no-op acknowledgement, and rejected with an actionable error for Fabric/Quilt mods). Both the loader and the Minecraft version auto-detect from mod metadata — including legacy `mcmod.info` `mcversion`, so a 1.12.2 mod needs no explicit `mcVersion`. Version ranges are parsed for their first concrete version (`extractConcreteVersion`), so `[1.16.5,1.17)` and `1.21.10 || 1.21.9` work.
 6. **`find_mapping`** - Lookup symbol mappings between namespaces
 7. **`search_minecraft_code`** - Regex search in decompiled source
 8. **`compare_versions`** - Compare classes/registries between versions
 9. **`analyze_mixin`** - Analyze and validate Mixin code
 10. **`validate_access_widener`** - Validate access widener files
-10a. **`validate_access_transformer`** - Validate Forge/NeoForge access transformer files (parses `.cfg`, checks signatures, flags record canonical-constructor widening, inner-class accessibility, **inherited members**, and conflicting modifiers — including **across files** via `extraFiles`; mojmap-only). Validates against the **remapped JAR's bytecode** (via the bundled ASM `bytecode-dumper`), not decompiled `.java` — decompiled source omits compiler-generated record members (canonical constructors, component accessors), so a source-based check false-flags them as missing (issue #12). Bytecode carries every member with its true access flags and erased descriptors (the same facts `javap` shows). Only needs the remapped JAR, which `decompile_minecraft_version` produces; per-class results are cached in a `remapped/{version}-{mapping}.bytecode.json` sidecar keyed by JAR signature. **Patched keys work too**: the patched flow does no remapping, so `decompileLocalJar` copies a *compiled* input JAR to `remapped/{version}-{mapping}.jar` — it already is that key's remapped JAR by definition — and every bytecode consumer then resolves a patched key exactly like a vanilla one. Patched *sources* JARs (NFRT/ForgeGradle `-sources.jar`) contain no bytecode and cannot be validated; the tool says so rather than telling you to decompile again. **Inherited members**: an AT only transforms the class it names, so a directive aimed at a member declared on a parent is silently inert — the validator resolves the full ancestor closure (`getClassBytecodeWithHierarchy`: transitive `superName` + interfaces, ancestors outside the JAR skipped) and reports the declaring class plus a paste-ready corrected directive. **Cross-file conflicts**: pass sibling ATs via `extraFiles` — every AT is applied together at build time, so conflicts across files fail the build like in-file ones; findings are restricted to those involving the file under validation, and the record-ctor note is suppressed when a sibling widens the constructor.
+10a. **`validate_access_transformer`** - Validate Forge/NeoForge access transformer files (parses `.cfg`, checks signatures, flags record canonical-constructor widening, inner-class accessibility, **inherited members**, and conflicting modifiers — including **across files** via `extraFiles`; mojmap-only). Validates against the **remapped JAR's bytecode** (via the bundled ASM `bytecode-dumper`), not decompiled `.java` — decompiled source omits compiler-generated record members (canonical constructors, component accessors), so a source-based check false-flags them as missing (issue #12). Bytecode carries every member with its true access flags and erased descriptors (the same facts `javap` shows). Only needs the remapped JAR, which `decompile_minecraft_version` produces; per-class results are cached in a `remapped/{version}-{mapping}.bytecode.json` sidecar keyed by JAR signature. **Patched keys work too**: the patched flow does no remapping, so `decompileLocalJar` copies a *compiled* input JAR to `remapped/{version}-{mapping}.jar` — it already is that key's remapped JAR by definition — and every bytecode consumer then resolves a patched key exactly like a vanilla one. Patched *sources* JARs (NFRT/ForgeGradle `-sources.jar`) contain no bytecode and cannot be validated; the tool says so rather than telling you to decompile again. **Inherited members**: an AT only transforms the class it names, so a directive aimed at a member declared on a parent is silently inert — the validator resolves the full ancestor closure (`getClassBytecodeWithHierarchy`: transitive `superName` + interfaces, ancestors outside the JAR skipped) and reports the declaring class plus a paste-ready corrected directive. **Cross-file conflicts**: pass sibling ATs via `extraFiles` — every AT is applied together at build time, so conflicts across files fail the build like in-file ones; findings are restricted to those involving the file under validation, and the record-ctor note is suppressed when a sibling widens the constructor. **Legacy SRG ids**: under `mapping: 'mcp'` (1.7.10–1.13.2) entries that name members by SRG id (`field_71428_T`, `func_180495_p`) are resolved to MCP names through the `mcp_stable` CSVs before lookup (see "Legacy Access Transformers Use SRG Member Names"), so a real 1.7.10 AT file validates instead of reporting every entry missing.
 11. **`compare_versions_detailed`** - AST-level version comparison
 12. **`index_minecraft_version`** - Create full-text search index
 13. **`search_indexed`** - Fast FTS5 search on indexed versions
@@ -361,32 +450,34 @@ Deterministic central-directory scan: any `.class` entry → decompile via VineF
 15. **`search_documentation`** - Search documentation
 
 ### Phase 3 Tools (Mod Analysis)
-16. **`analyze_mod_jar`** - Analyze third-party mod JAR files
-17. **`decompile_mod_jar`** - Decompile mod JARs to readable Java source
+16. **`analyze_mod_jar`** - Analyze third-party mod JAR files of ANY loader era (Fabric/Quilt, Forge 1.13+/NeoForge `mods.toml`, legacy Forge `mcmod.info`); backfills from `MANIFEST.MF` and bytecode and reports undetermined facts in `warnings`
+17. **`decompile_mod_jar`** - Decompile mod JARs to readable Java source. Auto-detects the mod id/version from metadata, `@Mod` bytecode and `MANIFEST.MF`; fails with instructions (rather than writing to `decompiled-mods/unknown/0.0.0/`) when the id/version cannot be determined
 18. **`search_mod_code`** - Search decompiled mod source code
 19. **`index_mod`** - Create full-text search index for mod source
 20. **`search_mod_indexed`** - Fast FTS5 search on indexed mod source
 
 #### `analyze_mod_jar` Tool
 
-Analyzes a mod JAR file to extract comprehensive metadata. Supports Fabric, Quilt, Forge, and NeoForge mods.
+Analyzes a mod JAR file to extract comprehensive metadata. Every loader era is supported: Fabric/Quilt (`fabric.mod.json`/`quilt.mod.json`), Forge 1.13–1.20.x and NeoForge (`META-INF/mods.toml`/`neoforge.mods.toml`), and **legacy Forge 1.6.4–1.12.2 (`mcmod.info`)**.
 
 **Input**:
 ```typescript
 {
   jarPath: string;           // Local path to the mod JAR file
   includeAllClasses?: boolean; // Include full class list (can be large)
-  includeRawMetadata?: boolean; // Include raw fabric.mod.json, mixin configs
+  includeRawMetadata?: boolean; // Include raw fabric.mod.json / mcmod.info / mods.toml / manifest / mixin configs
 }
 ```
 
 **Output** includes:
 - **Mod metadata**: ID, version, name, description, authors, license
 - **Compatibility**: Minecraft version, loader version, Java version, environment (client/server)
-- **Dependencies**: Required, optional, incompatible mods with version constraints
-- **Entry points**: Main, client, server initializers with class references
-- **Mixins**: Config files, packages, mixin class lists (common/client/server)
-- **Class analysis**: Total count, package breakdown, mixin detection via bytecode
+- **Dependencies**: Required, optional, incompatible mods with version constraints (Forge `mods.toml` dependency blocks are parsed with their ranges and `side`; legacy `requiredMods` are `required` and `dependencies`/`dependants` are `type: 'ordering'`)
+- **Entry points**: Fabric initializers, or Forge `@Mod` classes plus legacy coremods/tweakers (`MANIFEST.MF` `FMLCorePlugin`/`TweakClass`)
+- **Mixins**: Config files (loader metadata + `MANIFEST.MF` `MixinConfigs` + a `*.mixins.json` scan), packages, class lists, `minVersion`/`compatibilityLevel`/`refmap`
+- **Access transformers**: Forge `FMLAT` / NeoForge `[[accessTransformers]]` / legacy `*_at.cfg`
+- **Class analysis**: Total count, package breakdown, mixin detection and `mixinTargets` read from `@Mixin` bytecode
+- **Warnings**: everything that could not be determined (missing metadata, a fallback id/version, `@Mod` vs metadata disagreement)
 - **Nested JARs**: Jar-in-Jar dependencies
 
 **Example usage** (for LLM):
@@ -402,31 +493,32 @@ Returns JSON with full mod analysis including detected loader type, all dependen
 
 Analyzes third-party mod JARs without requiring Java. Performs:
 
-1. **Loader Detection**: Checks for `fabric.mod.json`, `quilt.mod.json`, `META-INF/mods.toml`
-2. **Metadata Parsing**: Extracts mod ID, version, dependencies from loader-specific files
-3. **Mixin Analysis**: Parses mixin config JSON files, extracts packages and class lists
-4. **Bytecode Analysis**: Scans `.class` files for `@Mixin` annotations in constant pool
-5. **Class Statistics**: Counts classes per package, identifies entry points
+1. **Loader Detection**: `fabric.mod.json`, `quilt.mod.json`, `META-INF/neoforge.mods.toml`, `META-INF/mods.toml`, root `mcmod.info`, `META-INF/fml_cache_annotation.json`, or an FML `MANIFEST.MF` (`FMLCorePlugin`/`TweakClass`)
+2. **Metadata Parsing**: mod ID, version, dependencies, entry points and access transformers from the loader-specific file — see "Mod Metadata Is Loader-Era Specific" above
+3. **Mixin Analysis**: config discovery from loader metadata + `MANIFEST.MF` `MixinConfigs` + a `*.mixins.json` scan; parses packages, class lists, `minVersion`, `compatibilityLevel`, `refmap`
+4. **Bytecode Analysis** (`src/parsers/class-file.ts`, no JDK): `@Mod` ids, legacy coremod interfaces, `@Mixin` targets (from BOTH retention attributes), class shape, method/field counts
+5. **Gap Reporting**: `warnings` names every fact that could not be determined, instead of substituting a placeholder
 
 **Key types** (`src/types/minecraft.ts`):
 - `ModLoader`: `'fabric' | 'quilt' | 'forge' | 'neoforge' | 'unknown'`
-- `ModAnalysisResult`: Complete analysis output structure
-- `ModClass`: Class metadata including mixin detection
+- `ModAnalysisResult`: Complete analysis output structure (incl. `warnings` and `accessTransformers`)
+- `ModClass`: Class metadata including mixin detection and `mixinTargets`
 - `ModMixinConfig`: Parsed mixin configuration
+- `DependencyType`: includes `'ordering'` for legacy `mcmod.info` load-order constraints
 
 ### `mod-decompile-service.ts`
 
 Decompiles mod JARs to readable Java source code. Supports both original (intermediary) and remapped JARs.
 
 **Key features**:
-1. **Auto-detection**: Automatically detects mod ID and version from JAR metadata
+1. **Auto-detection**: Mod ID and version from the loader metadata (Fabric/Quilt JSON, `mods.toml`, legacy `mcmod.info`), then `@Mod` bytecode, then `MANIFEST.MF` `Implementation-Version`. If neither can be determined the call FAILS with instructions instead of caching under `unknown/0.0.0` — one shared directory every unidentified mod would land in, so the next one would be handed the previous one's source.
 2. **Caching**: Decompiled sources cached in `AppData/decompiled-mods/{modId}/{modVersion}/{mapping}/`
 3. **Progress tracking**: Database-backed job tracking with progress updates
 4. **VineFlower integration**: Reuses same decompiler as Minecraft decompilation
 5. **WSL compatibility**: Full support for WSL and Windows path formats
 
 **Workflow**:
-1. `remap_mod_jar` - Remap mod JAR from intermediary → yarn/mojmap (optional, can skip if JAR already remapped)
+1. `remap_mod_jar` - Loader-aware remap (Fabric: intermediary → yarn/mojmap/feather; Forge 1.7.10–1.13.2: SRG → MCP). Optional — skip it if the JAR is already readable.
 2. `decompile_mod_jar` - Decompile JAR to readable Java source
 3. `search_mod_code` OR `index_mod` + `search_mod_indexed` - Search through decompiled source
 
@@ -438,13 +530,13 @@ Decompiles a mod JAR file to readable Java source code.
 ```typescript
 {
   jarPath: string;      // Path to mod JAR (WSL or Windows path)
-  mapping: 'yarn' | 'mojmap';  // Mapping type JAR uses
+  mapping: 'yarn' | 'mojmap' | 'mcp' | 'feather';  // Mapping type the JAR uses (mcp for 1.7.10-1.13.2 Forge, feather for pre-1.7.10)
   modId?: string;       // Optional, auto-detected if not provided
   modVersion?: string;  // Optional, auto-detected if not provided
 }
 ```
 
-**Output**: Decompiled source directory path, mod ID, and version
+**Output**: Decompiled source directory path, mod ID, version, and any `warnings`
 
 **Example**:
 ```

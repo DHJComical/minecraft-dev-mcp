@@ -614,8 +614,20 @@ export type ModLoader = 'fabric' | 'quilt' | 'forge' | 'neoforge' | 'unknown';
 /** Mod environment (client/server/both) */
 export type ModEnvironment = 'client' | 'server' | '*';
 
-/** Mod dependency type */
-export type DependencyType = 'required' | 'optional' | 'incompatible' | 'suggests' | 'breaks';
+/**
+ * Mod dependency type.
+ *
+ * `ordering` is the legacy-Forge notion from `mcmod.info`: `dependencies` /
+ * `dependants` only constrain LOAD ORDER (this mod must load after/before that
+ * one), unlike `required` which means "must be present".
+ */
+export type DependencyType =
+  | 'required'
+  | 'optional'
+  | 'incompatible'
+  | 'suggests'
+  | 'breaks'
+  | 'ordering';
 
 /** Mod dependency */
 export interface ModDependency {
@@ -627,6 +639,8 @@ export interface ModDependency {
   type: DependencyType;
   /** Is mandatory */
   mandatory: boolean;
+  /** Forge/NeoForge `side` (BOTH/CLIENT/SERVER), when the metadata declares one. */
+  side?: string;
 }
 
 /** Mod entrypoint */
@@ -669,6 +683,17 @@ export interface ModMixinConfig {
   clientMixins?: string[];
   /** Server-only mixins */
   serverMixins?: string[];
+  /** Config `required` flag (defaults to true in Mixin) */
+  required?: boolean;
+  /** Refmap file the config points at */
+  refmap?: string;
+  /**
+   * Mixin `compatibilityLevel` (e.g. `JAVA_8`). Legacy configs (Mixin 0.7 on
+   * 1.7.10/1.12.2) declare this plus `minVersion`.
+   */
+  compatibilityLevel?: string;
+  /** Mixin `minVersion` — the minimum Mixin build the config needs. */
+  minVersion?: string;
 }
 
 /** Analyzed class from mod JAR */
@@ -760,6 +785,17 @@ export interface ModAnalysisResult {
   /** Access widener file (Fabric) */
   accessWidener?: string;
 
+  /** Access transformer files (Forge 1.7.10-1.16 / NeoForge), as declared in the JAR */
+  accessTransformers?: string[];
+
+  /**
+   * Notes about anything that could not be determined from the JAR — a missing
+   * metadata file, a version recovered from a fallback, an id disagreement
+   * between the metadata file and the `@Mod` annotation. Empty/absent when the
+   * analysis was complete.
+   */
+  warnings?: string[];
+
   /** Class analysis */
   classes: {
     /** Total class count */
@@ -781,7 +817,12 @@ export interface ModAnalysisResult {
   rawMetadata?: {
     fabricModJson?: unknown;
     quiltModJson?: unknown;
+    /** Parsed legacy Forge `mcmod.info` (1.6.4-1.12.2) */
+    mcmodInfo?: unknown;
+    /** Raw `META-INF/mods.toml` / `neoforge.mods.toml` text */
     modsToml?: unknown;
+    /** `META-INF/MANIFEST.MF` main attributes (lowercased keys) */
+    manifest?: Record<string, string>;
     mixinConfigs?: Record<string, unknown>;
   };
 }

@@ -280,7 +280,8 @@ The skill's frontmatter tells the agent when to invoke it (any question about `n
 | Workflow | Steps |
 | --- | --- |
 | **First-time source access** | Call `get_minecraft_source` — server downloads, remaps, and decompiles (~5 min first run). Subsequent requests for the same version return in ~50 ms from cache. |
-| **Analyze a third-party mod** | `analyze_mod_jar` → `remap_mod_jar` → `decompile_mod_jar` → `search_mod_code` or `index_mod` + `search_mod_indexed` |
+| **Analyze a third-party mod** | `analyze_mod_jar` → `remap_mod_jar` → `decompile_mod_jar` → `search_mod_code` or `index_mod` + `search_mod_indexed`. Works for every loader era: Fabric/Quilt, Forge 1.13+/NeoForge (`mods.toml`), and legacy Forge 1.6.4–1.12.2 (`mcmod.info`). |
+| **Read a legacy Forge mod (1.7.10–1.12.2)** | `analyze_mod_jar` reads `mcmod.info` (id, version, `mcversion`, dependencies, `@Mod` entry point, coremod interface, manifest-declared mixin configs and ATs) → `remap_mod_jar` (SRG → MCP, loader + version auto-detected) → `decompile_mod_jar`. |
 | **Validate a Fabric mixin** | `analyze_mixin` with your Java source or file path — validates targets, injection points, and method selectors against the decompiled MC version. |
 | **Find breaking changes between versions** | `compare_versions` for a high-level overview, then `compare_versions_detailed` scoped to specific packages for full AST-level diffs. |
 | **Fast broad search** | `index_minecraft_version` once, then `search_indexed` with FTS5 queries: `entity AND damage`, `"onBlockBreak"`, `tick*`, `BlockEntity NOT render`. |
@@ -304,6 +305,18 @@ The skill's frontmatter tells the agent when to invoke it (any question about `n
 Not supported: **1.10.1** (no `mcp:<v>:srg` zip published) and pre-alpha versions (rd-\*/classic — Ornithe starts at alpha 1.0.10). Requests for unsupported versions fail fast with a clear error.
 
 Registry extraction (`get_registry_data`) requires the Minecraft data generator (1.13+) and is **not supported** for 1.12.2 and earlier — alpha/beta ids fail fast with a clear error.
+
+### Third-party mod support by era
+
+The mod tools are loader-*era* aware, not version-gated. Everything upstream of decompilation reads the JAR's own metadata:
+
+| Mod era | Metadata source | `analyze_mod_jar` | `remap_mod_jar` | AT validation |
+| --- | --- | --- | --- | --- |
+| **Fabric/Quilt (1.14+)** | `fabric.mod.json` / `quilt.mod.json` | id, version, deps, entry points, mixins, access widener | intermediary → yarn/mojmap/feather | n/a (access **widener**) |
+| **Forge 1.13 – 1.20.x / NeoForge** | `META-INF/mods.toml` / `neoforge.mods.toml` | id, version, deps **with version ranges and sides**, mixins, access transformers, `@Mod` entry point | SRG → MCP for 1.13–1.13.2 (1.14+ has no published SRG→member mappings) | mojmap (1.17+); `mcp` for 1.13.x |
+| **Legacy Forge 1.6.4 – 1.12.2** | `mcmod.info` + `MANIFEST.MF` | id, version, `mcversion`, `requiredMods`/`dependencies`, `@Mod` + coremod entry points, manifest-declared mixin configs and `FMLAT` access transformers | SRG → MCP (loader and version auto-detected) | `mapping: "mcp"` — SRG member ids resolved to MCP names |
+
+`analyze_mod_jar` also takes mixin targets from `@Mixin` bytecode (both `RetentionPolicy.RUNTIME` and `CLASS`, where Mixin actually lives) and reports anything it could not determine in a `warnings` array instead of inventing a value. `decompile_mod_jar` refuses to cache a mod whose id/version it could not detect, rather than writing it to a shared placeholder directory.
 
 Yarn mappings are discontinued after 1.21.11, which is the last obfuscated Minecraft version. All 26.1+ releases ship with readable class and method names and only require Mojmap.
 
