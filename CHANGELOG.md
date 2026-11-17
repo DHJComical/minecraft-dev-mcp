@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.7.2] - 2026-11-17
 
 Decompiled source for obfuscated versions was unreadable. Mojang ships U+2603
 (SNOWMAN) as the name of every parameter and local variable in
@@ -462,8 +462,9 @@ Initial public release.
   remap (official → intermediary → named).
 - Registry extraction via the server JAR's built-in data generator.
 
+[1.7.2]: https://github.com/DHJComical/minecraft-dev-mcp/compare/v1.7.1...v1.7.2
 [1.7.1]: https://github.com/DHJComical/minecraft-dev-mcp/compare/v1.7.0...v1.7.1
-[Unreleased]: https://github.com/MCDxAI/minecraft-dev-mcp/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/DHJComical/minecraft-dev-mcp/compare/v1.7.2...HEAD
 [1.3.0]: https://github.com/MCDxAI/minecraft-dev-mcp/compare/v1.2.4...v1.3.0
 [1.2.4]: https://github.com/MCDxAI/minecraft-dev-mcp/compare/v1.2.3...v1.2.4
 [1.2.3]: https://github.com/MCDxAI/minecraft-dev-mcp/compare/v1.2.2...v1.2.3
