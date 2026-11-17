@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Decompiled source for obfuscated versions was unreadable. Mojang ships U+2603
+(SNOWMAN) as the name of every parameter and local variable in
+`LocalVariableTable` / `MethodParameters` instead of stripping the attributes.
+Vineflower imported those names verbatim and disambiguated the collisions by
+appending `x`, so 1.8.9–1.14.3 came back as walls of `U+2603xxxx…` identifiers
+that neither read nor compile — while class and member names were correct.
+
+### Added
+
+- **Placeholder-aware decompilation** (`src/utils/debug-names.ts`): samples a
+  JAR's class entries for the placeholder character and reports whether its
+  debug-name tables are Mojang's filler. The check is ratio-based, so the single
+  incidental class in a 1.21.x JAR does not trip it.
+- `buildVineflowerArgs` exposed as a pure function, so the naming flags are
+  covered by tests instead of being buried in the process launch.
+
+### Fixed
+
+- **Readable variable names for obfuscated versions**: when the input JAR's
+  debug names are placeholders, `VineflowerWrapper` now passes
+  `--variable-renaming=jad --rename-parameters=true`, producing type-derived
+  names (`block15`, `flag1`, `iblockstate`) instead of `U+2603xxx…`. Both flags
+  are needed — variable renaming alone leaves parameters untouched. JARs with
+  real debug names (unobfuscated versions) are unchanged.
+- **Existing broken caches are rebuilt once**: `decompile-service` stamps
+  `decompiled/{version}/{mapping}.meta.json` with `DECOMPILER_PROFILE`. A cache
+  written before the stamp existed is adopted when a bounded scan finds no
+  placeholder, and rebuilt when it does — previously the `(version, mapping)`
+  cache key meant old broken output was served forever unless the caller knew
+  to pass `force: true`.
+
 ## [1.7.1] - 2026-09-20
 
 Legacy-mod release: the mod tools were built for 1.14+ metadata (Fabric JSON,

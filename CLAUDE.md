@@ -209,6 +209,36 @@ VineFlower creates these folders in the **current working directory** during dec
 
 **These are temporary and gitignored** - but the actual decompiled sources go to AppData.
 
+### Decompiler Variable Naming (U+2603 placeholders)
+
+Obfuscated Minecraft JARs ship debug information, but Mojang names every
+parameter and local variable with U+2603 (SNOWMAN) instead of stripping it — one
+shared constant-pool entry per class. Affected eras in practice: 1.8.9–1.14.3
+(1.7.10/1.4.7 carry no such attributes at all; 1.21.x uses real `$$0`-style
+names, with the character appearing in only ~1 class per JAR).
+
+Vineflower honours `LocalVariableTable` and `MethodParameters` by default, so it
+imports those names and uniquifies the collisions by appending `x`:
+
+```java
+for (Block \u2603xxxxxxxxxxxxxxx : REGISTRY) { boolean \u2603xxxxxxxxxxxxxxxx = false; ... }
+```
+
+The result is neither readable nor compilable. `VineflowerWrapper` therefore
+sniffs the input JAR (`utils/debug-names.ts`, sampling class entries and
+requiring the placeholder in a meaningful share of them) and, when found,
+passes `--variable-renaming=jad --rename-parameters=true`. Both flags are
+needed: variable-renaming alone leaves parameters untouched. Output then reads
+like `for (Block block15 : REGISTRY) { boolean flag1 = ... }`.
+
+Cache invalidation matters as much as the flags: sources cached by earlier
+releases stay broken otherwise. `decompile-service` writes
+`decompiled/{version}/{mapping}.meta.json` with `DECOMPILER_PROFILE` after every
+successful decompile. A tree whose stamp matches is trusted; a tree with no
+stamp (written before profiles existed) is adopted when a bounded scan finds no
+U+2603, and rebuilt once when it does. Bump the profile constant whenever a
+decompiler change makes previously cached output stale.
+
 ### Mod Metadata Is Loader-Era Specific (`src/parsers/`, `mod-analyzer-service.ts`)
 
 The metadata format changed twice, so the analyzer dispatches on what the JAR

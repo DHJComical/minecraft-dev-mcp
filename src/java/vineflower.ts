@@ -1,4 +1,5 @@
 import { getJavaResourceDownloader } from '../downloaders/java-resources.js';
+import { PLACEHOLDER_NAME_CHAR, hasPlaceholderDebugNames } from '../utils/debug-names.js';
 import { DecompilationError } from '../utils/errors.js';
 import { ensureDir } from '../utils/file-utils.js';
 import { logger } from '../utils/logger.js';
@@ -12,7 +13,61 @@ export interface VineflowerOptions {
   literalsAsIs?: boolean; // -lit=1
   indent?: string; // -ind="  "
   threads?: number; // -thr=4
+  /**
+   * Use Vineflower's type-derived JAD renamer instead of the JAR's debug names.
+   *
+   * When omitted, it is enabled automatically for JARs whose debug-name tables
+   * hold Mojang's U+2603 placeholder — see `utils/debug-names.ts`. Modern
+   * (unobfuscated) JARs keep their real names, so this stays opt-out for them.
+   */
+  renameVariables?: boolean;
   onProgress?: (current: number, total: number) => void;
+}
+
+/**
+ * Build the Vineflower CLI arguments.
+ *
+ * Exported for tests: the naming flags are the part that decides whether
+ * decompiled output is readable, so they should not be buried in `decompile()`.
+ */
+export function buildVineflowerArgs(
+  inputJar: string,
+  outputDir: string,
+  options: VineflowerOptions & { renameVariables: boolean },
+): string[] {
+  const {
+    decompileGenerics = true,
+    hideDefaultConstructor = false,
+    asciiStrings = true,
+    removeSynthetic = true,
+    literalsAsIs = true,
+    indent = '  ',
+    threads = 4,
+    renameVariables,
+  } = options;
+
+  const args: string[] = [
+    // Options
+    `-dgs=${decompileGenerics ? 1 : 0}`,
+    `-hdc=${hideDefaultConstructor ? 1 : 0}`,
+    `-asc=${asciiStrings ? 1 : 0}`,
+    `-rsy=${removeSynthetic ? 1 : 0}`,
+    `-lit=${literalsAsIs ? 1 : 0}`,
+    `-ind=${indent}`,
+    `-thr=${threads}`,
+  ];
+
+  if (renameVariables) {
+    // JAD-style naming derives names from types (`block`, `iblockstate`, `i`),
+    // which is the only readable option when the JAR's own names are the U+2603
+    // placeholder. `--rename-parameters` is required: variable-renaming alone
+    // leaves parameters untouched, and parameters are where most placeholders live.
+    args.push('--variable-renaming=jad', '--rename-parameters=true');
+  }
+
+  // Input and output
+  args.push(inputJar, outputDir);
+  return args;
 }
 
 /**
@@ -43,32 +98,22 @@ export class VineflowerWrapper {
     const jarPath = await this.ensureJar();
     ensureDir(outputDir);
 
-    const {
-      decompileGenerics = true,
-      hideDefaultConstructor = false,
-      asciiStrings = true,
-      removeSynthetic = true,
-      literalsAsIs = true,
-      indent = '  ',
-      threads = 4,
-      onProgress,
-    } = options;
+    const { onProgress, renameVariables } = options;
 
-    // Build Vineflower arguments
-    const args: string[] = [];
+    // Obfuscated Minecraft JARs ship U+2603 as every debug name, which decompiles
+    // into unreadable, colliding identifiers. Detect that once per JAR and fall
+    // back to type-derived names; JARs with real debug names are unaffected.
+    const useRenamer = renameVariables ?? hasPlaceholderDebugNames(inputJar);
+    if (useRenamer) {
+      logger.info(
+        `Placeholder debug names (${PLACEHOLDER_NAME_CHAR}) detected in ${inputJar} — using JAD-style variable renaming`,
+      );
+    }
 
-    // Options
-    args.push(`-dgs=${decompileGenerics ? 1 : 0}`);
-    args.push(`-hdc=${hideDefaultConstructor ? 1 : 0}`);
-    args.push(`-asc=${asciiStrings ? 1 : 0}`);
-    args.push(`-rsy=${removeSynthetic ? 1 : 0}`);
-    args.push(`-lit=${literalsAsIs ? 1 : 0}`);
-    args.push(`-ind=${indent}`);
-    args.push(`-thr=${threads}`);
-
-    // Input and output
-    args.push(inputJar);
-    args.push(outputDir);
+    const args = buildVineflowerArgs(inputJar, outputDir, {
+      ...options,
+      renameVariables: useRenamer,
+    });
 
     logger.info(`Decompiling with Vineflower: ${inputJar} -> ${outputDir}`);
 
